@@ -1,0 +1,19 @@
+{
+  "cmd": "experiment",
+  "n": 12,
+  "trials": 10,
+  "workers": null,
+  "policies": [
+    "FCFS",
+    "RandomIdle",
+    "OldestFastest",
+    "Delayed:p_min",
+    "Delayed:sqrt",
+    "SpeedThreshold:2"
+  ],
+  "max_opt_n": 12,
+  "interval": 0.1,
+  "quick": false,
+  "out": "results",
+  "func": "<function cmd_experiment at 0x7fa6765a3600>"
+}
