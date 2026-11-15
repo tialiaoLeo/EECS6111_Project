@@ -63,7 +63,7 @@ holding one job back.
 (Proof by monotonicity, optimality of greedy for equal sizes, and time scaling; checked by the
 verifier.)
 
-**Open (the natural main question).**
+**Open (the natural main question).** *(Superseded by §2b below, 2026-11-15.)*
 - Is FCFS $O(\sqrt{\Delta})$ on $m$ machines? Searches up to $\Delta = 36$ found no counterexample, but
   there is no proof. The busy-period argument of Claim 2 breaks for $m \ge 2$, because a job can start on
   a free machine while the others are busy.
@@ -73,6 +73,67 @@ verifier.)
   with release dates. Matching the lower bound seems to require a *randomized delay*.
 
 ---
+
+## 2b. Work-conserving ("start immediately") rules — added 2026-11-15
+
+Prompted by the question "real clusters don't wait; should the model force immediate start?". Same
+status as above: one agent derived each claim and a second agent tried to refute it. No mathematical
+error was found, but nothing has been checked by us.
+
+A rule is **work-conserving (WC)** if, whenever a worker is idle and a job is waiting, it starts some
+waiting job. On identical workers its only freedom is *which* waiting job to start.
+
+**Claim 8 (order invariance).** For every $m$, $\Delta$ and $n$, every deterministic WC rule (FCFS,
+LCFS, or any rule using the revealed history) has exactly the same worst-case ratio as FCFS.
+*Idea:* (A) given rule $X$ on instance $I$, move release times earlier, to the suffix minimum along $X$'s
+start order. FCFS then reproduces $X$'s schedule, and OPT can only get smaller. (B) Conversely, set the
+release times inside each "queue period" of FCFS to the period start; an adaptive adversary then forces
+any WC rule into FCFS's busy pattern.
+Checked on 1200 small instances with exact OPT: no failure.
+
+**Claim 9 (lower bound, improves Claim 3).** Every deterministic algorithm, including ones that idle,
+has ratio at least $\sqrt{\Delta}$ for every $m$ (as a supremum).
+*Idea:* a batch at time $0$. The adversary makes the first $Lm$ jobs started, counted *globally* in time
+order, long and the rest short; then $\mathrm{ALG} \ge m\cdot\mathrm{LPT}$ while
+$\mathrm{OPT} = m\cdot\mathrm{SPT}$, and the ratio tends to $\sqrt{\Delta}$ as (short jobs)/(long jobs)
+$\to \sqrt{\Delta}$.
+
+**Claim 10 (upper bound for every WC rule).** For $\Delta \ge 4$,
+$$
+\mathrm{ALG} \le \big(1 + \sqrt{2(1 - 1/m)}\big)\sqrt{\Delta}\cdot\mathrm{OPT} \;<\; 2.415\,\sqrt{\Delta}\cdot\mathrm{OPT}.
+$$
+*Idea:* split time into maximal intervals in which all $m$ workers are busy. Within one interval, the
+order costs at most $\sqrt{\Delta}$ times SPT (the single-machine batch bound), combined with the
+Eastman–Even–Isaacs lower bound for $m$ machines. The extra term pays for the at most $m-1$ jobs that
+are already running when the interval starts. This "carry-in" is exactly where the $m=1$ proof breaks,
+and it costs the $\sqrt{2(1-1/m)}$.
+
+**Consequences.**
+- $\sqrt{\Delta} \le \rho^*(\Delta, m) \le \rho_{\mathrm{WC}}(\Delta, m) \le 2.415\sqrt{\Delta}$. On identical
+  workers, deliberate waiting can improve the worst case by at most a constant factor
+  ($\le 2$ for $m=2$, $< 2.415$ in general). "Clusters start immediately" is justified by a theorem, not
+  just assumed.
+- If the model *forced* immediate start, Claim 8 would leave only one algorithm (FCFS, up to worst
+  case), and the remaining question would be a constant between $\sqrt{\Delta}$ and $2.415\sqrt{\Delta}$.
+- Benchmark: OPT must stay the unrestricted optimum (which may idle). A WC-restricted OPT would hide the
+  cost of not waiting: the "burst" instance would have ratio 1 instead of about $\sqrt{\Delta/2}$.
+
+**Still open:** whether $\rho_{\mathrm{WC}}(\Delta, m) = \sqrt{\Delta}$ exactly for $m \ge 2$ (no
+counterexample in small searches); randomized algorithms; heterogeneous speeds, where WC rules fall
+into the slow-worker trap (§3).
+
+**Industry check (sourced, reviewed).** For one anonymous stream of single-node jobs on identical,
+always-available workers, documented dispatchers start a waiting job whenever a worker is free, apart
+from scheduler latency: Slurm's main loop and backfill (a width-1 head job always fits), kube-scheduler,
+YARN with a single queue, Celery with late binding. Deliberate idling does exist in production, but
+every documented case relies on something the model leaves out:
+- multi-node jobs (backfill reservations);
+- data locality (Spark delay scheduling);
+- maintenance reservations (machines leaving service);
+- per-user or per-tenant limits;
+- small dedicated short-job pools, about 1–3% of nodes, where shortness is *declared* through an enforced
+  walltime: LLNL Dane `pdebug` (40 of 1500 nodes, 1 h limit), ALCF Polaris debug, Moab's "shortpool"
+  standing reservation, older NERSC debug nodes.
 
 ## 3. Optional extension: two related workers (speeds $1$ and $H$)
 
