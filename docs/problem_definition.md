@@ -80,8 +80,10 @@ $$
 
 ### 3.1 Input
 
-- Workers $\mathcal{M} = \{1, \dots, m\}$, all identical (unit speed).
-- Jobs $\mathcal{J} = \{1, \dots, n\}$. Job $j$ has a release time $r_j \ge 0$ and a size $p_j$ with
+- Workers $\mathcal{M} = \{1, \dots, m\}$, all identical (unit speed). **The worker set is fixed:** it is
+  known before time $0$, every worker is available from time $0$ on, and workers are never added or
+  removed.
+- Jobs $\mathcal{J} = \{1, \dots, n\}$, **revealed online**. Job $j$ has a release time $r_j \ge 0$ and a size $p_j$ with
   $$
   p_{\min} \le p_j \le p_{\max}.
   $$
@@ -118,8 +120,11 @@ $$
 \;\cup\; \{\, C_j : C_j \le t \,\}.
 $$
 
-It does **not** know $p_j$ for any job that has not finished. A job is placed on a worker only when it
-starts (jobs wait in one central queue). Every decision at time $t$ (which waiting job to start on which
+It does **not** know $p_j$ for any job that has not finished. The two kinds of missing information are
+separate: **online** means the scheduler does not know that job $j$ exists before time $r_j$, nor how
+many jobs will come; **non-clairvoyant** means it does not know $p_j$ even after $r_j$. Instances in
+which several jobs share a release time (for example all $r_j = 0$) are allowed as a special case. A job
+is placed on a worker only when it starts (jobs wait in one central queue). Every decision at time $t$ (which waiting job to start on which
 idle worker, if any) must be a function of $\mathcal{I}(t)$.
 
 So the scheduler knows each job's running time only up to a factor $\Delta$: $p_j \in [p_{\min}, p_{\max}]$.
