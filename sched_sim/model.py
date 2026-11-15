@@ -1,7 +1,9 @@
 """Problem model: jobs, threads, instances and instance generators.
 
-Notation follows the proposal: job j has release time r_j and size p_j;
-thread i processes job j at speed s_ij, so its runtime is p_j / s_ij.
+Notation follows docs/problem_definition.md: job j has release time r_j, size p_j and
+(in the declared-limit model) a declared time limit u_j with u_j / lambda <= p_j <= u_j.
+Thread i processes job j at speed s_ij, so its runtime is p_j / s_ij; in the
+declared-limit model all speeds are 1.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ class Job:
     release: float
     size: float
     speeds: tuple[float, ...]
+    limit: float | None = None  # declared time limit u_j (None outside the declared-limit model)
 
     def runtime_on(self, thread: int) -> float:
         return self.size / self.speeds[thread]
@@ -31,6 +34,7 @@ class JobView:
     id: int
     release: float
     speeds: tuple[float, ...]
+    limit: float | None = None  # declared time limit u_j, visible at release
 
 
 @dataclass
@@ -41,6 +45,7 @@ class Instance:
     p_max: float
     name: str = "instance"
     meta: dict = field(default_factory=dict)
+    lam: float = 1.0  # known accuracy of the declared limits: u_j / lam <= p_j <= u_j
 
     @property
     def n(self) -> int:
@@ -59,6 +64,18 @@ class Instance:
         speeds = [s for j in self.jobs for s in j.speeds]
         return max(speeds) / min(speeds)
 
+    @property
+    def has_limits(self) -> bool:
+        return bool(self.jobs) and all(j.limit is not None for j in self.jobs)
+
+    def check_limits(self, tol: float = 1e-9) -> None:
+        """Assert u_j / lam <= p_j <= u_j for every job."""
+        assert self.has_limits, "instance has no declared limits"
+        for j in self.jobs:
+            assert j.limit / self.lam - tol * j.limit <= j.size <= j.limit * (1 + tol), (
+                f"job {j.id}: size {j.size} outside [{j.limit / self.lam}, {j.limit}]"
+            )
+
     def to_json(self, path: str | Path) -> None:
         data = asdict(self)
         Path(path).write_text(json.dumps(data, indent=2))
@@ -66,7 +83,9 @@ class Instance:
     @classmethod
     def from_json(cls, path: str | Path) -> "Instance":
         data = json.loads(Path(path).read_text())
-        data["jobs"] = [Job(j["id"], j["release"], j["size"], tuple(j["speeds"])) for j in data["jobs"]]
+        data["jobs"] = [
+            Job(j["id"], j["release"], j["size"], tuple(j["speeds"]), j.get("limit")) for j in data["jobs"]
+        ]
         return cls(**data)
 
 
@@ -178,13 +197,95 @@ def random_instance(
     )
 
 
-def lower_bound_instance(n: int, L: float, delta_t: float, m: int = 1, offset: float = 0.0) -> Instance:
+def lower_bound_instance(
+    n: int, L: float, delta_t: float, m: int = 1, offset: float = 0.0, with_limits: bool = False
+) -> Instance:
     """The example from the proposal: one long job at time 0, then n-1 short jobs of size delta_t
     released at time offset + delta_t.
 
     Any rule that starts the long job at time `offset` pays Omega(nL); Opt pays O(L + n^2 delta_t).
     With offset = tau this is the adaptive adversary against a delayed rule with threshold tau.
+
+    with_limits=True gives every job the same declared limit u = L, so the limits carry no information
+    and lam = L / delta_t (the special case "all u_j equal" of the declared-limit model).
     """
-    jobs = [Job(0, 0.0, L, (1.0,) * m)]
-    jobs += [Job(j, offset + delta_t, delta_t, (1.0,) * m) for j in range(1, n)]
-    return Instance(jobs, m, delta_t, L, name="lower-bound", meta={"L": L, "delta_t": delta_t, "offset": offset})
+    limit = L if with_limits else None
+    jobs = [Job(0, 0.0, L, (1.0,) * m, limit)]
+    jobs += [Job(j, offset + delta_t, delta_t, (1.0,) * m, limit) for j in range(1, n)]
+    return Instance(
+        jobs, m, delta_t, L, name="lower-bound",
+        meta={"L": L, "delta_t": delta_t, "offset": offset},
+        lam=L / delta_t if with_limits else 1.0,
+    )
+
+
+# --------------------------------------------------------------------------- #
+# Declared-limit model (docs/problem_definition.md, v3)
+# --------------------------------------------------------------------------- #
+
+SIZE_DISTS = ("uniform", "loguniform", "low", "high", "extremes")
+DEFAULT_LIMITS = (1.0, 2.0, 4.0, 8.0, 16.0, 32.0)
+
+
+def limits_between(u_min: float, u_max: float) -> tuple[float, ...]:
+    """Powers of two from u_min up to u_max: a coarse menu like users' modal walltime requests."""
+    out, u = [], float(u_min)
+    while u <= u_max * (1 + 1e-12):
+        out.append(u)
+        u *= 2
+    return tuple(out)
+
+
+def sizes_within_limits(rng: np.random.Generator, limits: np.ndarray, lam: float, dist: str) -> np.ndarray:
+    """Draw p_j in [u_j / lam, u_j].
+
+    uniform / loguniform: spread over the interval; low: p_j = u_j / lam (every limit overestimates
+    by exactly lam); high: p_j = u_j (exact limits); extremes: one endpoint or the other, 50/50.
+    """
+    lo = limits / lam
+    if dist == "uniform":
+        p = rng.uniform(lo, limits)
+    elif dist == "loguniform":
+        p = np.exp(rng.uniform(np.log(lo), np.log(limits)))
+    elif dist == "low":
+        p = lo.copy()
+    elif dist == "high":
+        p = limits.copy()
+    elif dist == "extremes":
+        p = np.where(rng.random(len(limits)) < 0.5, lo, limits)
+    else:
+        raise ValueError(f"unknown size distribution {dist!r}; choose from {SIZE_DISTS}")
+    return np.clip(p, lo, limits)
+
+
+def limit_instance(
+    n: int,
+    m: int,
+    *,
+    lam: float = 4.0,
+    limits: tuple[float, ...] = DEFAULT_LIMITS,
+    size_dist: str = "uniform",
+    arrival_rate: float | None = None,
+    load: float = 0.8,
+    seed: int | None = None,
+) -> Instance:
+    """m identical workers; each job declares a limit u_j drawn from `limits` and has a hidden size
+    p_j in [u_j / lam, u_j]. Poisson arrivals, by default at the given load."""
+    if lam < 1:
+        raise ValueError("lam must be >= 1")
+    rng = np.random.default_rng(seed)
+    u = rng.choice(np.asarray(limits, dtype=float), size=n)
+    p = sizes_within_limits(rng, u, lam, size_dist)
+    if arrival_rate is None:
+        arrival_rate = load * m / float(np.mean(p))
+    releases = np.concatenate([[0.0], np.cumsum(rng.exponential(1.0 / arrival_rate, size=n - 1))])
+    jobs = [Job(j, float(releases[j]), float(p[j]), (1.0,) * m, float(u[j])) for j in range(n)]
+    return Instance(
+        jobs,
+        m,
+        p_min=float(min(u)) / lam,
+        p_max=float(max(u)),
+        name=f"limits-{size_dist}",
+        meta={"seed": seed, "limits": list(map(float, limits)), "size_dist": size_dist, "arrival_rate": arrival_rate},
+        lam=float(lam),
+    )

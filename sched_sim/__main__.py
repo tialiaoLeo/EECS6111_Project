@@ -7,8 +7,11 @@ import json
 import time
 from pathlib import Path
 
-from .model import SIZE_MODELS, SPEED_MODELS, Instance, lower_bound_instance, random_instance
-from .policies import DEFAULT_POLICIES, make_policy
+from .model import (
+    SIZE_DISTS, SIZE_MODELS, SPEED_MODELS, Instance, limit_instance, limits_between, lower_bound_instance,
+    random_instance,
+)
+from .policies import DEFAULT_POLICIES, LIMIT_POLICIES, make_policy
 
 
 def _outdir(base: str, tag: str) -> Path:
@@ -20,33 +23,79 @@ def _outdir(base: str, tag: str) -> Path:
 def _instance_from_args(a) -> Instance:
     if a.instance:
         return Instance.from_json(a.instance)
+    if a.trace:
+        from .traces import trace_instance
+
+        inst, stats = trace_instance(
+            a.trace, a.m, max_procs=a.trace_max_procs, min_runtime=a.trace_min_runtime,
+            lam=a.lam if a.trace_lam_filter else None, start=a.trace_start, max_jobs=a.n,
+            time_unit=a.trace_time_unit,
+        )
+        print("trace: " + stats.summary())
+        return inst
     if a.lower_bound:
-        return lower_bound_instance(a.n, L=a.p_max, delta_t=a.p_min, m=a.m)
+        return lower_bound_instance(a.n, L=a.p_max, delta_t=a.p_min, m=a.m, with_limits=a.model == "limits")
+    if a.model == "limits":
+        return limit_instance(
+            a.n, a.m, lam=a.lam, limits=limits_between(a.u_min, a.u_max), size_dist=a.size_dist, seed=a.seed,
+        )
     return random_instance(
         a.n, a.m, p_min=a.p_min, p_max=a.p_max, H=a.H,
         speed_model=a.speed_model, size_model=a.size_model, seed=a.seed,
     )
 
 
+def _policies_for(a, inst: Instance) -> list[str]:
+    if a.policies:
+        return a.policies
+    return LIMIT_POLICIES if inst.has_limits else DEFAULT_POLICIES
+
+
 def _add_instance_args(p: argparse.ArgumentParser, n: int, m: int) -> None:
     g = p.add_argument_group("instance")
     g.add_argument("--instance", help="load an instance JSON instead of generating one")
+    g.add_argument("--trace", help="load an SWF trace (Parallel Workloads Archive); -n = number of jobs kept")
     g.add_argument("--lower-bound", action="store_true", help="use the proposal's long-job-then-short-jobs instance")
+    g.add_argument("--model", choices=("limits", "speeds"), default="limits",
+                   help="limits: declared time limits on identical workers (v3); speeds: heterogeneous speeds")
     g.add_argument("-n", type=int, default=n, help="number of jobs")
     g.add_argument("-m", type=int, default=m, help="number of worker threads")
-    g.add_argument("--p-min", type=float, default=1.0)
-    g.add_argument("--p-max", type=float, default=16.0)
-    g.add_argument("--H", type=float, default=4.0, help="speed ratio bound")
-    g.add_argument("--speed-model", choices=SPEED_MODELS, default="related")
-    g.add_argument("--size-model", choices=SIZE_MODELS, default="bimodal")
     g.add_argument("--seed", type=int, default=0)
+    lim = p.add_argument_group("declared-limit model (--model limits)")
+    lim.add_argument("--lam", type=float, default=4.0, help="limits overestimate sizes by at most this factor")
+    lim.add_argument("--size-dist", choices=SIZE_DISTS, default="uniform", help="sizes within [u/lam, u]")
+    lim.add_argument("--u-min", type=float, default=1.0, help="smallest declared limit (limits are powers of 2)")
+    lim.add_argument("--u-max", type=float, default=32.0, help="largest declared limit")
+    tr = p.add_argument_group("trace (--trace)")
+    tr.add_argument("--trace-start", type=int, default=0, help="skip this many kept jobs")
+    tr.add_argument("--trace-max-procs", type=int, default=1, help="keep jobs using at most this many processors")
+    tr.add_argument("--trace-min-runtime", type=float, default=60.0,
+                    help="drop jobs shorter than this (s): jobs that fail at start-up")
+    tr.add_argument("--trace-lam-filter", action="store_true",
+                    help="drop jobs with u/p > --lam (default: set lam to the largest u/p kept)")
+    tr.add_argument("--trace-time-unit", type=float, default=3600.0, help="seconds per model time unit")
+    sp = p.add_argument_group("speed model (--model speeds)")
+    sp.add_argument("--p-min", type=float, default=1.0, help="also the short job size of --lower-bound")
+    sp.add_argument("--p-max", type=float, default=16.0, help="also the long job size of --lower-bound")
+    sp.add_argument("--H", type=float, default=4.0, help="speed ratio bound")
+    sp.add_argument("--speed-model", choices=SPEED_MODELS, default="related")
+    sp.add_argument("--size-model", choices=SIZE_MODELS, default="bimodal")
 
 
-def _print_instance(inst: Instance) -> None:
-    print(f"instance {inst.name}: n={inst.n} m={inst.m} Delta={inst.delta:g} H={inst.H:.2f}")
-    for j in inst.jobs:
-        speeds = ", ".join(f"{s:.2f}" for s in j.speeds)
-        print(f"  job {j.id:3d}  r={j.release:8.3f}  p={j.size:7.3f}  s=[{speeds}]")
+def _print_instance(inst: Instance, limit: int = 40) -> None:
+    if inst.has_limits:
+        print(f"instance {inst.name}: n={inst.n} m={inst.m} lam={inst.lam:g} "
+              f"limits in [{min(j.limit for j in inst.jobs):g}, {max(j.limit for j in inst.jobs):g}]")
+    else:
+        print(f"instance {inst.name}: n={inst.n} m={inst.m} Delta={inst.delta:g} H={inst.H:.2f}")
+    for j in inst.jobs[:limit]:
+        if inst.has_limits:
+            print(f"  job {j.id:3d}  r={j.release:8.3f}  u={j.limit:7.3f}  p={j.size:7.3f}")
+        else:
+            speeds = ", ".join(f"{s:.2f}" for s in j.speeds)
+            print(f"  job {j.id:3d}  r={j.release:8.3f}  p={j.size:7.3f}  s=[{speeds}]")
+    if inst.n > limit:
+        print(f"  ... ({inst.n - limit} more)")
 
 
 def cmd_simulate(a) -> None:
@@ -69,7 +118,7 @@ def cmd_simulate(a) -> None:
         ref, ref_kind = opt.total_completion, "OPT"
     else:
         ref, ref_kind = opt_lower_bound(inst), "OPT lower bound"
-    for spec in a.policies:
+    for spec in _policies_for(a, inst):
         s = simulate(inst, make_policy(spec), seed=a.seed, speedup=a.speedup)
         s.validate()
         schedules.append(s)
@@ -92,7 +141,7 @@ def cmd_execute(a) -> None:
     _print_instance(inst)
 
     results = []
-    for spec in a.policies:
+    for spec in _policies_for(a, inst):
         policy = make_policy(spec)
         print(f"\nrunning {policy.name} on {inst.m} worker processes ...", flush=True)
         res = execute(inst, policy, time_scale=a.time_scale, workload=a.workload,
@@ -113,15 +162,18 @@ def cmd_execute(a) -> None:
 
 
 def cmd_experiment(a) -> None:
-    from .experiments import Scenario, default_grid, run_experiment, summarize, write_csv
+    from .experiments import Scenario, default_grid, limits_grid, run_experiment, summarize, write_csv
     from .plots import plot_experiment_ratios, plot_experiment_tasks
 
-    if a.quick:
+    if a.grid == "limits":
+        scenarios = limits_grid(a.n, quick=a.quick)
+    elif a.quick:
         scenarios = [Scenario("random", a.n, m, sm, "bimodal", 1.0, d, 4.0)
                      for m in (1, 2) for sm in ("identical", "unrelated") for d in (4.0, 32.0)]
         scenarios += [Scenario("lower_bound", a.n, 1, "identical", "bimodal", 1.0, L, 1.0) for L in (8.0, 128.0)]
     else:
         scenarios = default_grid(a.n)
+    a.policies = a.policies or (LIMIT_POLICIES if a.grid == "limits" else DEFAULT_POLICIES)
     out = _outdir(a.out, "experiment")
     print(f"{len(scenarios)} scenarios x {a.trials} trials, policies: {', '.join(a.policies)}")
     res = run_experiment(scenarios, a.policies, trials=a.trials, workers=a.workers,
@@ -153,7 +205,7 @@ def main(argv=None) -> None:
 
     s = sub.add_parser("simulate", help="exact discrete-event simulation of one instance, all policies vs OPT")
     _add_instance_args(s, n=8, m=2)
-    s.add_argument("--policies", nargs="+", default=DEFAULT_POLICIES)
+    s.add_argument("--policies", nargs="+", default=None, help="default: the baselines of the instance's model")
     s.add_argument("--max-opt-n", type=int, default=11)
     s.add_argument("--speedup", type=float, default=1.0, help="(1+eps) speed augmentation for online policies")
     s.add_argument("--out", default="results")
@@ -161,7 +213,7 @@ def main(argv=None) -> None:
 
     e = sub.add_parser("execute", help="run policies on real worker processes with CPU/memory monitoring")
     _add_instance_args(e, n=12, m=3)
-    e.add_argument("--policies", nargs="+", default=["FCFS", "OldestFastest", "Delayed:sqrt"])
+    e.add_argument("--policies", nargs="+", default=None, help="default: the baselines of the instance's model")
     e.add_argument("--time-scale", type=float, default=0.05, help="wall seconds per model time unit")
     e.add_argument("--workload", choices=("duty", "compute"), default="duty")
     e.add_argument("--interval", type=float, default=0.05, help="monitor sampling interval (s)")
@@ -173,7 +225,9 @@ def main(argv=None) -> None:
     x.add_argument("-n", type=int, default=8)
     x.add_argument("--trials", type=int, default=20)
     x.add_argument("--workers", type=int, default=None, help="pool size (default: CPU count)")
-    x.add_argument("--policies", nargs="+", default=DEFAULT_POLICIES)
+    x.add_argument("--grid", choices=("limits", "speeds"), default="limits",
+                   help="limits: declared-limit model (v3); speeds: heterogeneous-speed grid")
+    x.add_argument("--policies", nargs="+", default=None, help="default: the baselines of the grid's model")
     x.add_argument("--max-opt-n", type=int, default=10)
     x.add_argument("--interval", type=float, default=0.1)
     x.add_argument("--quick", action="store_true", help="small scenario grid")

@@ -188,7 +188,7 @@ def execute(
             now = model_now()
             while next_arrival < len(arrivals) and arrivals[next_arrival].release <= now + EPS:
                 j = arrivals[next_arrival]
-                waiting[j.id] = JobView(j.id, j.release, j.speeds)
+                waiting[j.id] = JobView(j.id, j.release, j.speeds, j.limit)
                 next_arrival += 1
 
             queue_view = sorted(waiting.values(), key=lambda v: (v.release, v.id))

@@ -1,6 +1,7 @@
 """Online non-clairvoyant, non-preemptive scheduling policies.
 
-A policy only ever sees `JobView`s (release time and speeds, never the size).
+A policy only ever sees `JobView`s (release time, speeds and, in the declared-limit model,
+the declared limit u_j; never the size).
 The same policy objects drive both the discrete-event simulator and the real
 multi-process executor.
 """
@@ -25,6 +26,7 @@ class Context:
     p_min: float
     p_max: float
     H: float
+    lam: float = 1.0  # accuracy of declared limits: u_j / lam <= p_j <= u_j
 
     @property
     def delta(self) -> float:
@@ -55,6 +57,12 @@ class Policy:
 
 def _fastest(job: JobView, threads: list[int]) -> int:
     return max(threads, key=lambda i: (job.speeds[i], -i))
+
+
+def _limit(job: JobView) -> float:
+    if job.limit is None:
+        raise ValueError(f"job {job.id} has no declared limit; this policy needs the declared-limit model")
+    return job.limit
 
 
 class FCFS(Policy):
@@ -150,6 +158,43 @@ class SpeedThreshold(Policy):
         return out
 
 
+class SLF(Policy):
+    """Shortest declared Limit First: SPT on the declared limits u_j instead of the hidden sizes.
+
+    Never idles while a job waits. Ties go to the earlier release, then the lower id.
+    """
+
+    name = "SLF"
+
+    def decide(self, now, waiting, idle):
+        order = sorted(waiting, key=lambda v: (_limit(v), v.release, v.id))
+        return OldestFastest.decide(self, now, order, idle)
+
+
+class DelayedSLF(Policy):
+    """Delayed SPT (Hoogeveen & Vestjens, IPCO 1996) with the declared limit u_j in place of p_j.
+
+    Job j is eligible only once now >= alpha * u_j; among eligible jobs the smallest limit starts
+    first. alpha = 1 is the classical rule. With exact limits (lam = 1) and one machine it is the
+    2-competitive delayed SPT rule.
+    """
+
+    def __init__(self, alpha: float = 1.0):
+        self.alpha = alpha
+
+    @property
+    def name(self) -> str:
+        return "DelayedSLF" if self.alpha == 1.0 else f"DelayedSLF(alpha={self.alpha:g})"
+
+    def decide(self, now, waiting, idle):
+        eligible = [v for v in waiting if self.alpha * _limit(v) <= now + EPS]
+        return SLF.decide(self, now, eligible, idle)
+
+    def next_wakeup(self, now, waiting):
+        future = [self.alpha * _limit(v) for v in waiting if self.alpha * _limit(v) > now + EPS]
+        return min(future) if future else None
+
+
 TAU_RULES = {
     "0": lambda c: 0.0,
     "p_min": lambda c: c.p_min,
@@ -170,7 +215,8 @@ def resolve_tau(spec: float | str, ctx: Context) -> float:
 
 
 def make_policy(spec: str) -> Policy:
-    """Build a policy from a CLI string, e.g. 'FCFS', 'Delayed:sqrt', 'Delayed:2.5', 'SpeedThreshold:2'."""
+    """Build a policy from a CLI string, e.g. 'FCFS', 'SLF', 'DelayedSLF', 'DelayedSLF:0.5',
+    'Delayed:sqrt', 'Delayed:2.5', 'SpeedThreshold:2'."""
     name, _, arg = spec.partition(":")
     key = name.lower()
     if key == "fcfs":
@@ -183,7 +229,14 @@ def make_policy(spec: str) -> Policy:
         return Delayed(arg or "p_min")
     if key in ("speedthreshold", "threshold"):
         return SpeedThreshold(float(arg or 2.0))
+    if key == "slf":
+        return SLF()
+    if key == "delayedslf":
+        return DelayedSLF(float(arg or 1.0))
     raise ValueError(f"unknown policy {spec!r}")
 
 
+# Policies for the heterogeneous-speed model (v1/v2).
 DEFAULT_POLICIES = ["FCFS", "RandomIdle", "OldestFastest", "Delayed:p_min", "Delayed:sqrt", "SpeedThreshold:2"]
+# Baselines of the declared-limit model (docs/problem_definition.md, section 6).
+LIMIT_POLICIES = ["FCFS", "SLF", "Delayed:p_min", "DelayedSLF"]

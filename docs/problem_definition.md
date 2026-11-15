@@ -227,14 +227,20 @@ baseline.
 
 ## 9. Mapping to the code
 
-The current simulator implements v2: there is no declared limit. Changes needed for v3:
-
-| Needed | Where |
+| Object | Code |
 | --- | --- |
-| a declared limit per job, visible to policies | add `limit` to `model.Job` and `model.JobView` |
-| instance generator with $p_j \in [u_j/\lambda, u_j]$ | new generator in `model.py` |
-| policies SLF and Delayed-SLF | `policies.py` (register in `make_policy`) |
-| known parameter $\lambda$ | `policies.Context` |
-| Parallel Workloads Archive loader (SWF fields 2, 4, 9; single-node jobs) | new module |
-| exact OPT and lower bound | `offline.offline_opt` / `opt_lower_bound` work unchanged (they only use $r_j$ and $p_j$) |
-| experiment grid over $\lambda$ and $m$ | `experiments.py` (drop the speed models) |
+| job with declared limit $u_j$ | `model.Job(id, release, size, speeds, limit)` |
+| what the scheduler sees ($r_j$, $u_j$; no size) | `model.JobView` |
+| instance and $\lambda$ | `model.Instance` (`.lam`, `.check_limits()`) |
+| synthetic instances, $p_j \in [u_j/\lambda, u_j]$ | `model.limit_instance(n, m, lam=..., limits=..., size_dist=...)` |
+| known parameters $m$, $\lambda$ | `policies.Context` |
+| baselines FCFS, SLF, Delayed($\tau$), Delayed-SLF | `policies.FCFS`, `SLF`, `Delayed`, `DelayedSLF`; `policies.LIMIT_POLICIES` |
+| online execution | `simulator.simulate(instance, policy)` |
+| $\mathrm{OPT}$ (exact, $n \lesssim 12$) / lower bound | `offline.offline_opt`, `offline.opt_lower_bound` |
+| Parallel Workloads Archive traces | `traces.trace_instance(path, m, min_runtime=60, lam=None, max_jobs=...)` |
+| experiment grid over $m$, $\lambda$, size distribution | `experiments.limits_grid`; CLI `experiment --grid limits` |
+
+Trace filtering (`traces.py`): keep single-node jobs; drop jobs shorter than `min_runtime` (default 60 s),
+which are mostly jobs that failed at start-up and are left out for now; clip run times that exceed the
+requested time (kill latency) to the limit; then either drop jobs with $u_j/p_j > \lambda$ or set
+$\lambda$ to the largest ratio kept.

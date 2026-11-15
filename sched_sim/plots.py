@@ -137,30 +137,40 @@ def plot_policy_comparison(results: list[ExecutionResult], path: str | Path) -> 
 
 
 def plot_experiment_ratios(rows: list[dict], path: str | Path) -> None:
-    """Competitive ratio distributions: by policy per speed model, and mean ratio vs Delta."""
+    """Competitive ratio distributions per panel, and mean/worst ratio against the panel's parameter.
+
+    Panels: one per speed model for kind="random" (x = Delta), one per m for kind="limits"
+    (x = lam), and one for the proposal's lower-bound family.
+    """
     policies = list(dict.fromkeys(r["policy"] for r in rows))
+    panels = []  # (title, rows, x key, x label)
     random_rows = [r for r in rows if r["kind"] == "random"]
-    speed_models = list(dict.fromkeys(r["speed_model"] for r in random_rows))
+    for sm in dict.fromkeys(r["speed_model"] for r in random_rows):
+        panels.append((f"{sm} speeds", [r for r in random_rows if r["speed_model"] == sm],
+                       "delta", "Delta = p_max / p_min"))
+    limit_rows = [r for r in rows if r["kind"] == "limits"]
+    for m in sorted({r["m"] for r in limit_rows}):
+        panels.append((f"declared limits, m={m}", [r for r in limit_rows if r["m"] == m],
+                       "lam", "lambda (limit overestimates size by at most this factor)"))
     lb_rows = [r for r in rows if r["kind"] == "lower_bound"]
 
-    ncols = len(speed_models) + (1 if lb_rows else 0)
-    fig, axes = plt.subplots(2, max(ncols, 1), figsize=(5 * max(ncols, 1), 8), squeeze=False)
-    for c, sm in enumerate(speed_models):
-        sub = [r for r in random_rows if r["speed_model"] == sm]
+    ncols = max(len(panels) + (1 if lb_rows else 0), 1)
+    fig, axes = plt.subplots(2, ncols, figsize=(5 * ncols, 8), squeeze=False)
+    for c, (title, sub, xkey, xlabel) in enumerate(panels):
         data = [[r["ratio"] for r in sub if r["policy"] == p] for p in policies]
         axes[0, c].boxplot(data, tick_labels=policies, showfliers=True)
-        axes[0, c].set_title(f"{sm} speeds: ALG / OPT", fontsize=10)
+        axes[0, c].set_title(f"{title}: ALG / OPT", fontsize=10)
         axes[0, c].tick_params(axis="x", rotation=40, labelsize=7)
 
-        deltas = sorted({r["delta"] for r in sub})
+        xs = sorted({r[xkey] for r in sub})
         for k, p in enumerate(policies):
-            means = [np.mean([r["ratio"] for r in sub if r["policy"] == p and r["delta"] == d]) for d in deltas]
-            worst = [np.max([r["ratio"] for r in sub if r["policy"] == p and r["delta"] == d]) for d in deltas]
-            axes[1, c].plot(deltas, means, "o-", color=CMAP(k * 2 % 20), label=p)
-            axes[1, c].plot(deltas, worst, "x:", color=CMAP(k * 2 % 20))
-        axes[1, c].set_xscale("log", base=2)
-        axes[1, c].set_xlabel("Delta = p_max / p_min")
-        axes[1, c].set_title(f"{sm}: mean (o-) and worst (x:) ratio vs Delta", fontsize=10)
+            vals = [[r["ratio"] for r in sub if r["policy"] == p and r[xkey] == x] for x in xs]
+            axes[1, c].plot(xs, [np.mean(v) for v in vals], "o-", color=CMAP(k * 2 % 20), label=p)
+            axes[1, c].plot(xs, [np.max(v) for v in vals], "x:", color=CMAP(k * 2 % 20))
+        if len(xs) > 1 and min(xs) > 0:
+            axes[1, c].set_xscale("log", base=2)
+        axes[1, c].set_xlabel(xlabel, fontsize=8)
+        axes[1, c].set_title(f"{title}: mean (o-) and worst (x:) ratio", fontsize=10)
     if lb_rows:
         c = ncols - 1
         Ls = sorted({r["p_max"] for r in lb_rows})
@@ -171,8 +181,8 @@ def plot_experiment_ratios(rows: list[dict], path: str | Path) -> None:
         axes[0, c].set_xlabel("L (long job size)")
         axes[0, c].set_title("proposal lower-bound instance", fontsize=10)
         axes[1, c].axis("off")
-    handles, labels = axes[1, 0].get_legend_handles_labels() if speed_models else axes[0, -1].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="lower center", ncol=min(6, len(labels)), fontsize=8)
+    handles, labels = axes[1, 0].get_legend_handles_labels() if panels else axes[0, -1].get_legend_handles_labels()
+    fig.legend(handles, labels, loc="lower center", ncol=min(6, max(1, len(labels))), fontsize=8)
     fig.tight_layout(rect=(0, 0.05, 1, 1))
     fig.savefig(path, dpi=120)
     plt.close(fig)

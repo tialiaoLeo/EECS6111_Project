@@ -11,7 +11,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from .model import Instance, lower_bound_instance, random_instance
+from .model import Instance, limit_instance, limits_between, lower_bound_instance, random_instance
 from .monitor import ResourceMonitor
 from .offline import offline_opt, opt_lower_bound
 from .policies import make_policy
@@ -20,7 +20,15 @@ from .simulator import simulate
 
 @dataclass(frozen=True)
 class Scenario:
-    kind: str = "random"  # "random" or "lower_bound"
+    """One cell of an experiment grid.
+
+    kind = "limits": declared-limit model. Limits are powers of two in [p_min, p_max], sizes are
+        drawn from `size_dist` within [u_j / lam, u_j], and all workers are identical.
+    kind = "random": heterogeneous-speed model (v1/v2) with `speed_model` / `size_model`.
+    kind = "lower_bound": the proposal's long-job-then-short-jobs instance.
+    """
+
+    kind: str = "random"  # "limits", "random" or "lower_bound"
     n: int = 8
     m: int = 2
     speed_model: str = "related"
@@ -28,6 +36,8 @@ class Scenario:
     p_min: float = 1.0
     p_max: float = 16.0
     H: float = 4.0
+    lam: float = 1.0
+    size_dist: str = "uniform"
 
     @property
     def delta(self) -> float:
@@ -37,11 +47,19 @@ class Scenario:
     def label(self) -> str:
         if self.kind == "lower_bound":
             return f"LB n={self.n} m={self.m} L={self.p_max:g}"
-        return f"{self.speed_model}/{self.size_model} n={self.n} m={self.m} D={self.delta:g} H={self.H:g}"
+        if self.kind == "limits":
+            return f"limits/{self.size_dist} n={self.n} m={self.m} lam={self.lam:g} U={self.delta:g}"
+        h = "" if self.speed_model == "identical" else f" H={self.H:g}"
+        return f"{self.speed_model}/{self.size_model} n={self.n} m={self.m} D={self.delta:g}{h}"
 
     def build(self, seed: int) -> Instance:
         if self.kind == "lower_bound":
             return lower_bound_instance(self.n, L=self.p_max, delta_t=self.p_min, m=self.m)
+        if self.kind == "limits":
+            return limit_instance(
+                self.n, self.m, lam=self.lam, limits=limits_between(self.p_min, self.p_max),
+                size_dist=self.size_dist, seed=seed,
+            )
         return random_instance(
             self.n,
             self.m,
@@ -52,6 +70,20 @@ class Scenario:
             size_model=self.size_model,
             seed=seed,
         )
+
+
+LIMIT_LAMS = (1.0, 2.0, 4.0, 16.0, 64.0)
+
+
+def limits_grid(n: int = 8, quick: bool = False) -> list[Scenario]:
+    """Declared-limit model: m x lam x size distribution, limits 1..32 (powers of two)."""
+    ms = (1, 2) if quick else (1, 2, 3)
+    lams = (1.0, 4.0, 64.0) if quick else LIMIT_LAMS
+    dists = ("uniform",) if quick else ("uniform", "low", "extremes")
+    return [
+        Scenario("limits", n, m, "identical", "uniform", 1.0, 32.0, 1.0, lam, d)
+        for m, lam, d in itertools.product(ms, lams, dists)
+    ]
 
 
 def default_grid(n: int = 8) -> list[Scenario]:

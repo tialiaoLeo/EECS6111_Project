@@ -13,7 +13,7 @@ from .policies import EPS, Context, Policy
 
 
 def context_for(instance: Instance) -> Context:
-    return Context(m=instance.m, p_min=instance.p_min, p_max=instance.p_max, H=instance.H)
+    return Context(m=instance.m, p_min=instance.p_min, p_max=instance.p_max, H=instance.H, lam=instance.lam)
 
 
 def simulate(instance: Instance, policy: Policy, seed: int | None = None, speedup: float = 1.0) -> Schedule:
@@ -31,7 +31,7 @@ def simulate(instance: Instance, policy: Policy, seed: int | None = None, speedu
     while len(done) < len(jobs):
         while next_arrival < len(arrivals) and arrivals[next_arrival].release <= t + EPS:
             j = arrivals[next_arrival]
-            waiting[j.id] = JobView(j.id, j.release, j.speeds)
+            waiting[j.id] = JobView(j.id, j.release, j.speeds, j.limit)
             next_arrival += 1
         while running and running[0][0] <= t + EPS:
             _, thread, _ = heapq.heappop(running)
