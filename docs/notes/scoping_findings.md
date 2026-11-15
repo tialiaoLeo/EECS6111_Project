@@ -3,6 +3,12 @@
 Background notes behind [../problem_definition.md](../problem_definition.md): why the scope was
 narrowed, and what a literature and feasibility check turned up.
 
+> **Update 2026-11-15.** The definition is now v3: HPC batch jobs with declared time limits $u_j$, with
+> $u_j/\lambda \le p_j \le u_j$. Sections 1–2b below analyze v2 (one global range, $\Delta = \lambda$),
+> which is the special case of v3 in which all $u_j$ are equal. They explain why v2 was too symmetric
+> (§2b: every work-conserving rule has the same worst case, and waiting gains at most a constant).
+> v3 restores per-job information, so ordering and waiting matter again.
+
 > **Status of these notes.** Everything below comes from AI research agents. The math was derived by
 > one agent and then re-checked by a second agent, independently and numerically (brute-force exact OPT
 > on thousands of small random instances). None of it has been peer reviewed, and none of it has been

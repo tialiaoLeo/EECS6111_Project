@@ -1,98 +1,94 @@
-# Problem Definition (simplified scope)
+# Problem Definition
 
-**Non-Clairvoyant Non-Preemptive Online Scheduling on a Pool of Identical Workers with Bounded Job Sizes**
+**Online Non-Preemptive Scheduling of Batch Jobs with Declared Time Limits**
 
 EECS 6111 (Online Algorithms) course project — Liao & Shao
 
-> This version replaces the general model of the proposal (unrelated speeds $s_{ij}$, parameters
-> $\Delta, H, m$) with a smaller model that maps onto a real system and is small enough to finish.
-> The general version is kept in [archive/problem_definition_general_v1.md](archive/problem_definition_general_v1.md).
-> Why this scope was chosen, and what is already known, is in
-> [notes/scoping_findings.md](notes/scoping_findings.md).
+> **Scope history.**
+> - v1: unrelated speeds, parameters $\Delta, H, m$ — [archive/problem_definition_general_v1.md](archive/problem_definition_general_v1.md)
+> - v2: identical workers with one global size range $[p_{\min}, p_{\max}]$ — [archive/problem_definition_v2_bounded_sizes.md](archive/problem_definition_v2_bounded_sizes.md)
+> - v3 (this file): each job declares its own time limit.
+>
+> The reason for each change is in [notes/scoping_findings.md](notes/scoping_findings.md). In short, v2 is
+> too symmetric: every job looks the same to the scheduler, so every rule that starts jobs immediately
+> has the same worst case and deliberate waiting cannot help by more than a constant. v3 restores
+> job-specific information, which is what real batch jobs carry.
 
 ---
 
 ## 1. Summary
 
-A cluster partition has $m$ identical workers. Jobs arrive over time. Each job runs on one worker, and
-once it starts it must run to completion: no pausing, migration, or restart. The scheduler does **not**
-know how long a job will run. It only knows that every job takes between $p_{\min}$ and $p_{\max}$,
-because the system enforces a time limit $p_{\max}$ and we only consider jobs of at least $p_{\min}$.
-The scheduler decides which waiting job to start when a worker is free, and whether to leave a worker
-idle on purpose. The goal is to minimize the total completion time $\sum_j C_j$. We measure an online
-rule by its competitive ratio against the offline optimum, as a function of the two parameters
+We focus on one kind of task: **batch jobs submitted to an HPC cluster partition, where every job
+declares a time limit.** A partition has $m$ identical nodes. Jobs arrive over time. When job $j$
+arrives, the scheduler sees its **declared limit $u_j$**: the user's requested walltime, which the system
+enforces. The scheduler does not see the true running time $p_j$. It only knows that the limit
+overestimates the running time by at most a known factor $\lambda$:
 
 $$
-\Delta = \frac{p_{\max}}{p_{\min}} \quad (\text{size uncertainty}), \qquad m \quad (\text{number of workers}).
+\frac{u_j}{\lambda} \;\le\; p_j \;\le\; u_j .
 $$
+
+Jobs run without interruption. The scheduler decides which waiting job to start when a node is free,
+and whether to leave a node idle on purpose. The goal is to minimize the total completion time
+$\sum_j C_j$. The central question is **how much the declared limits help**, measured by the
+competitive ratio as a function of the accuracy $\lambda$ and the number of nodes $m$.
 
 ---
 
 ## 2. Industry setting
 
-**Main example: a partition of a shared batch cluster (e.g. Slurm), restricted to single-node jobs.**
+**HPC batch partition (e.g. Slurm), single-node jobs.**
 
-Users submit jobs to a partition over time. Each job runs on one node until it finishes. Slurm
-enforces a time limit per job: when the limit is reached, the job's tasks are sent SIGTERM and then
-SIGKILL ([sbatch](https://slurm.schedmd.com/sbatch.html)), and the partition's `MaxTime` caps every
-request ([slurm.conf](https://slurm.schedmd.com/slurm.conf.html)). Preemption is disabled by default
-([preemption guide](https://slurm.schedmd.com/preempt.html)). Users do give runtime estimates, but
-workload studies found them "extremely unreliable", with actual runtimes spread roughly uniformly
-below the estimate (Mu'alem & Feitelson, IEEE TPDS 2001); see also Tsafrir, Etsion & Feitelson
-(IEEE TPDS 2007). What users experience is their average wait or turnaround time.
+- **Each job declares a limit, and it is enforced.** Users request a time limit (`sbatch --time`). When
+  it is reached, the job's tasks are sent SIGTERM and then SIGKILL
+  ([sbatch](https://slurm.schedmd.com/sbatch.html)). The partition's `MaxTime` caps every request
+  ([slurm.conf](https://slurm.schedmd.com/slurm.conf.html)).
+- **Limits are known, true runtimes are not.** Workload studies found that user estimates are
+  "extremely unreliable", with actual runtimes spread roughly uniformly below the estimate
+  (Mu'alem & Feitelson, IEEE TPDS 12(6), 2001). They are also coarse: about 90% of jobs use the same
+  20 values (Tsafrir, Etsion & Feitelson, IEEE TPDS 18(6), 2007). A limit is an upper bound, not a
+  prediction.
+- **No preemption by default** ([preemption guide](https://slurm.schedmd.com/preempt.html)).
+- **Real schedulers use the limits.** Backfilling relies on each job's limit. So "the scheduler sees
+  $u_j$" describes real systems better than the global range of v2.
+- **Real data exists.** The [Parallel Workloads Archive](https://www.cs.huji.ac.il/labs/parallel/workload/)
+  records, for every job, its submit time, its requested time ($u_j$) and its actual run time ($p_j$)
+  ([SWF format](https://www.cs.huji.ac.il/labs/parallel/workload/swf.html)). So $\lambda$ can be
+  measured directly and rules can be tested on real traces.
 
-| Model assumption | Mechanism in the real system | Fit |
+| Model element | Real mechanism | Fit |
 | --- | --- | --- |
-| Jobs arrive online | users submit over time | holds |
-| $m$ identical workers | the nodes of one homogeneous partition | holds after restricting to single-node jobs |
-| Size $p_j$ unknown | user estimates are unreliable (Mu'alem & Feitelson 2001) | holds |
-| $p_j \le p_{\max}$, known | the enforced time limit / partition `MaxTime` | holds |
-| $p_j \ge p_{\min}$, known | no physical floor; $p_{\min}$ is "the shortest job we care about" (workload studies filter out jobs that fail at start-up, e.g. under 90 s) | by convention |
-| Non-preemptive | Slurm's default: preemption off | holds |
-| Scheduler may idle on purpose | a custom dispatcher can hold a node | allowed by the model, not used by default schedulers |
-| Objective $\sum_j C_j$ | sites track average wait/turnaround, i.e. flow time | close (see §3.6) |
+| $m$ identical workers, fixed | the nodes of one homogeneous partition | holds after restricting to single-node jobs |
+| jobs arrive online | users submit over time | holds |
+| $u_j$ known at arrival | requested walltime (`--time`) | holds |
+| $p_j \le u_j$ | enforced limit; a job that hits it is killed and frees its node at exactly $u_j$ | holds: for the schedule, a killed job is a job of size $u_j$ |
+| $p_j \ge u_j / \lambda$, $\lambda$ known | no hard floor in reality; many jobs end far below their limit | **stylized**; experiments must measure or filter it (§7) |
+| non-preemptive | Slurm's default | holds |
+| objective $\sum_j C_j$ | sites track average wait/turnaround (flow time) | close (§3.6) |
 
-Realistic values are large: for example $p_{\min} = 90\text{ s}$ and $p_{\max} = 4\text{ h}$ give
-$\Delta = 160$.
-
-**Second example (one sentence in the report): a capped serverless worker pool.** An AWS Lambda
-function with a concurrency cap of $m$ runs at most $m$ invocations at once, each environment runs one
-invocation at a time, and every invocation is cut off at a configured timeout
-([timeout](https://docs.aws.amazon.com/lambda/latest/dg/configuration-timeout.html),
-[concurrency](https://docs.aws.amazon.com/lambda/latest/dg/lambda-concurrency.html)). A dispatcher in
-front of the pool faces the same problem.
-
-**What the model deliberately leaves out:** multi-node jobs and backfilling; priorities and fair-share;
-per-job time limits (we use one global $p_{\max}$); predicting runtimes from a user's history;
-kill-and-requeue when a job hits its limit; heterogeneous node types (see the optional extension in §6).
-Our results therefore measure the cost of *one job per worker, no preemption, unknown sizes*. They are
-not a model of a production scheduler end to end.
+**What the model leaves out:** multi-node jobs and backfill reservations; priorities, fair-share and
+per-user limits; heterogeneous node types; runtime prediction from user history; jobs that fail
+immediately (they have $p_j \approx 0$ and violate $p_j \ge u_j/\lambda$).
 
 ---
 
 ## 3. Formal model
 
-In standard notation the problem is
-
-$$
-P \;\big|\; r_j,\ \text{online},\ \text{non-clairvoyant},\ \text{non-pmtn},\ p_j \in [p_{\min}, p_{\max}] \;\big|\; \textstyle\sum_j C_j .
-$$
-
 ### 3.1 Input
 
-- Workers $\mathcal{M} = \{1, \dots, m\}$, all identical (unit speed). **The worker set is fixed:** it is
-  known before time $0$, every worker is available from time $0$ on, and workers are never added or
-  removed.
-- Jobs $\mathcal{J} = \{1, \dots, n\}$, **revealed online**. Job $j$ has a release time $r_j \ge 0$ and a size $p_j$ with
+- **Workers** $\mathcal{M} = \{1, \dots, m\}$, identical (unit speed). The set is **fixed**: it is known
+  before time $0$, every worker is available from time $0$ on, and none is added or removed.
+- **Jobs** $\mathcal{J} = \{1, \dots, n\}$, **revealed online**. Job $j$ has a release time $r_j \ge 0$,
+  a declared limit $u_j > 0$, and a size $p_j$ with
   $$
-  p_{\min} \le p_j \le p_{\max}.
+  \frac{u_j}{\lambda} \;\le\; p_j \;\le\; u_j .
   $$
-  The size is the job's running time on any worker.
+- **Accuracy parameter** $\lambda \ge 1$, the same for all jobs. The declared limits $u_j$ themselves
+  may differ arbitrarily from job to job.
 
 ### 3.2 Schedule
 
-A schedule assigns each job $j$ a worker $a_j \in \mathcal{M}$ and a start time $S_j$. Its completion
-time is
+A schedule gives each job a worker $a_j \in \mathcal{M}$ and a start time $S_j$; then
 
 $$
 C_j = S_j + p_j .
@@ -100,141 +96,145 @@ $$
 
 ### 3.3 Feasibility
 
-1. **Release:** $S_j \ge r_j$ for all $j$.
+1. **Release:** $S_j \ge r_j$.
 2. **One job per worker at a time:** if $j \ne k$ and $a_j = a_k$, then $[S_j, C_j) \cap [S_k, C_k) = \varnothing$.
 3. **Non-preemption:** job $j$ runs without interruption on worker $a_j$ during $[S_j, C_j)$. There is
    no pausing, migration, or kill-and-restart.
 
-Workers may stay idle even while jobs are waiting.
+Workers may stay idle even while jobs are waiting. Jobs wait in one central queue and are bound to a
+worker only when they start.
 
-### 3.4 Information (online, non-clairvoyant)
+### 3.4 Information
 
-**Known in advance:** $m$, $p_{\min}$, $p_{\max}$. **Not known:** $n$, and anything about future jobs.
+**Known in advance:** $m$ and $\lambda$. **Not known:** $n$, and anything about future jobs.
 
 At time $t$ the scheduler knows
 
 $$
-\mathcal{I}(t) = \{m, p_{\min}, p_{\max}\}
-\;\cup\; \{\, r_j : r_j \le t \,\}
+\mathcal{I}(t) = \{m, \lambda\}
+\;\cup\; \{\, (r_j,\, u_j) : r_j \le t \,\}
 \;\cup\; \{\, (a_j, S_j) : S_j \le t \,\}
 \;\cup\; \{\, C_j : C_j \le t \,\}.
 $$
 
-It does **not** know $p_j$ for any job that has not finished. The two kinds of missing information are
-separate: **online** means the scheduler does not know that job $j$ exists before time $r_j$, nor how
-many jobs will come; **non-clairvoyant** means it does not know $p_j$ even after $r_j$. Instances in
-which several jobs share a release time (for example all $r_j = 0$) are allowed as a special case. A job
-is placed on a worker only when it starts (jobs wait in one central queue). Every decision at time $t$ (which waiting job to start on which
-idle worker, if any) must be a function of $\mathcal{I}(t)$.
+- **Online:** the scheduler does not know that job $j$ exists before $r_j$.
+- **Non-clairvoyant up to a factor $\lambda$:** after $r_j$ it knows $u_j$, hence
+  $p_j \in [u_j/\lambda,\, u_j]$, but not $p_j$ itself until the job finishes.
 
-So the scheduler knows each job's running time only up to a factor $\Delta$: $p_j \in [p_{\min}, p_{\max}]$.
-At $\Delta = 1$ the problem is clairvoyant; as $\Delta \to \infty$ the scheduler knows nothing about sizes.
+Every decision at time $t$ must be a function of $\mathcal{I}(t)$.
 
 ### 3.5 Objective
 
 $$
-\min \; \mathrm{ALG}(I) = \sum_{j \in \mathcal{J}} C_j .
+\min \;\sum_{j \in \mathcal{J}} C_j .
 $$
 
 ### 3.6 Remark on flow time
 
-Practitioners measure turnaround (flow) time $F_j = C_j - r_j$. Since
-$\sum_j F_j = \sum_j C_j - \sum_j r_j$, both objectives have the same optimal schedules, but their
-competitive ratios differ: the ratio for $\sum C_j$ is never larger. We study $\sum C_j$, as in the
-proposal, and the report should say so explicitly.
+Sites measure turnaround $F_j = C_j - r_j$. Since $\sum_j F_j = \sum_j C_j - \sum_j r_j$, the optimal
+schedules are the same, but the competitive ratios differ (the ratio for $\sum C_j$ is never larger).
+We study $\sum C_j$, and the report should say so.
 
 ---
 
 ## 4. Benchmark and competitive ratio
 
-**Offline optimum.** $\mathrm{OPT}(I)$ is the minimum of $\sum_j C_j$ over all feasible schedules of
-instance $I$. It knows every $r_j$ and $p_j$ in advance, but uses the same $m$ workers and is also
-non-preemptive.
+**Offline optimum.** $\mathrm{OPT}(I)$ is the minimum of $\sum_j C_j$ over feasible schedules. It knows
+every $r_j$ and $p_j$, uses the same $m$ workers, is non-preemptive, and **may idle**. (Restricting OPT to
+schedules that never idle would hide the cost of starting jobs too early.)
 
-**Competitive ratio.** Let $\mathcal{I}(\Delta, m)$ be all instances with $m$ workers and sizes in
-$[p_{\min}, p_{\max}]$, where $p_{\max}/p_{\min} = \Delta$, with any $n$ and any release times. For a
-deterministic online algorithm,
+**Competitive ratio.** Let $\mathcal{I}(\lambda, m)$ contain all instances with $m$ workers and
+$u_j/\lambda \le p_j \le u_j$ for every $j$, with any $n$, release times and limits. For a deterministic
+online algorithm,
 
 $$
-\rho_{\mathrm{ALG}}(\Delta, m) = \sup_{I \in \mathcal{I}(\Delta, m)} \frac{\mathrm{ALG}(I)}{\mathrm{OPT}(I)},
+\rho_{\mathrm{ALG}}(\lambda, m) = \sup_{I \in \mathcal{I}(\lambda, m)} \frac{\mathrm{ALG}(I)}{\mathrm{OPT}(I)},
 \qquad
-\rho^{*}(\Delta, m) = \inf_{\mathrm{ALG}} \rho_{\mathrm{ALG}}(\Delta, m).
+\rho^{*}(\lambda, m) = \inf_{\mathrm{ALG}} \rho_{\mathrm{ALG}}(\lambda, m).
 $$
 
-For a randomized algorithm, replace $\mathrm{ALG}(I)$ by $\mathbb{E}[\mathrm{ALG}(I)]$ (oblivious
-adversary).
+For randomized algorithms, use $\mathbb{E}[\mathrm{ALG}(I)]$ (oblivious adversary).
 
-**Scale invariance.** Multiplying all release times and sizes by the same constant multiplies both
-$\mathrm{ALG}$ and $\mathrm{OPT}$ by it (for rules whose waiting times scale with $p_{\min}$). So only
-the ratio $\Delta$ matters, and we may normalize $p_{\min} = 1$, $p_{\max} = \Delta$.
+**Two special cases that anchor the problem.** Both are contained in $\mathcal{I}(\lambda, m)$, so
+lower bounds for them carry over to $\rho^*(\lambda, m)$.
+
+| Special case | What it becomes | Status |
+| --- | --- | --- |
+| $\lambda = 1$ | $p_j = u_j$: **clairvoyant** online $P \mid r_j \mid \sum C_j$ | known constant ratios; on one machine the best deterministic ratio is $2$ (Hoogeveen & Vestjens, IPCO 1996) |
+| all $u_j$ equal to $u$ | v2 with $p_{\min} = u/\lambda$, $p_{\max} = u$, so $\Delta = \lambda$ | see [notes](notes/scoping_findings.md) §1–2b (agent-derived, **to be verified**) |
+
+**Observation (why the limits must be used).** A rule that ignores $u_j$, such as FCFS, has a ratio that
+grows with the spread of the limits. Already at $\lambda = 1$ on one worker: start a job with
+$u = p = L$ at time $0$, then release $k$ jobs with $u = p = 1$ just after. FCFS pays about $(k+1)L$,
+while OPT pays $L + O(k^2)$. So a ratio bounded in terms of $\lambda$ alone needs a rule that looks at
+$u_j$.
 
 ---
 
 ## 5. Research questions
 
-1. **How does $\rho^{*}(\Delta, m)$ depend on $\Delta$ and $m$?** Lower bounds for every deterministic
-   algorithm, and upper bounds for concrete rules.
-2. **Does waiting help?** Is there a choice of $\tau$ for which the delayed rule below beats FCFS, and
-   does the answer change between $m = 1$ and $m \ge 2$?
-3. **Randomization.** Can a randomized rule (random order, random delay) do better than every
-   deterministic rule?
-4. **Experiments.** Empirical ratios against the exact $\mathrm{OPT}$ on small instances, on synthetic
-   workloads and on single-node jobs from public HPC traces
-   ([Parallel Workloads Archive](https://www.cs.huji.ac.il/labs/parallel/workload/)).
+1. **How much do declared limits help?** How does $\rho^*(\lambda, m)$ grow between the clairvoyant end
+   ($\lambda = 1$, a constant) and the uninformative end (large $\lambda$)? Is it $\Theta(\sqrt{\lambda})$,
+   $\Theta(\lambda)$, or something else? Does it depend on $m$?
+2. **Order.** How well does starting the job with the smallest declared limit do, compared with FCFS?
+3. **Waiting.** In the clairvoyant case, waiting is essential (delayed SPT). Does a delayed rule driven by
+   $u_j$ still help when $\lambda > 1$, and how should the delay depend on $u_j$ and $\lambda$?
+4. **Experiments.** Measure the distribution of $u_j / p_j$ in real traces. Compare the rules below on
+   synthetic instances (with exact OPT for small $n$) and on single-node jobs from Parallel Workloads
+   Archive traces.
 
-## 5.1 Baselines (existing rules, no new algorithm yet)
+---
 
-All rules see only the waiting queue (release times, sorted by $(r_j, j)$), the idle workers, the
-current time $t$, and $m, p_{\min}, p_{\max}$.
+## 6. Baselines (existing rules only)
 
-| Rule | Description | Idles on purpose? | Code |
+All rules see only $\mathcal{I}(t)$: for each waiting job, its release time and declared limit.
+
+| Rule | Description | Uses $u_j$? | Idles on purpose? |
 | --- | --- | --- | --- |
-| **FCFS** | when a worker is idle, start the oldest waiting job on it | no | `FCFS` |
-| **RandomIdle** | oldest waiting job on a uniformly random idle worker (randomized) | no | `RandomIdle` |
-| **Delayed($\tau$)** | job $j$ becomes eligible only at $t \ge r_j + \tau$; the oldest eligible job starts on an idle worker | yes | `Delayed:<tau>` |
+| **FCFS** | when a worker is idle, start the waiting job that arrived first | no | no |
+| **SLF** (shortest declared limit first) | when a worker is idle, start the waiting job with the smallest $u_j$ (SPT on the declared limits) | yes | no |
+| **Delayed($\tau$)** | job $j$ becomes eligible only at $t \ge r_j + \tau$; the oldest eligible job starts | no | yes |
+| **Delayed-SLF** | the delayed SPT rule of Hoogeveen & Vestjens with $u_j$ in place of $p_j$: an idle worker starts the eligible job with the smallest limit only if $t \ge u_j$, otherwise it waits | yes | yes |
 
-Candidate thresholds (already in the code):
-
-$$
-\tau \in \Big\{\, 0,\;\; p_{\min},\;\; \sqrt{p_{\min} p_{\max}},\;\; p_{\max} \,\Big\}.
-$$
-
-$\mathrm{Delayed}(0)$ is FCFS. On identical workers, `OldestFastest` is the same rule as FCFS (ties go
-to the lowest-numbered worker), and `SpeedThreshold` only matters once speeds differ (§6).
+The first three are already in the code. SLF and Delayed-SLF are the classical size-based rules fed with
+the declared limits instead of the true sizes. How to adapt them to $\lambda > 1$ (for example, which
+value between $u_j/\lambda$ and $u_j$ to use as a job's "size") is part of research question 3, not a
+baseline.
 
 ---
 
-## 6. How to add parameters later (optional)
+## 7. Experiments: generating instances and using traces
 
-Each extension adds one parameter and keeps the rest of the model unchanged.
-
-| Order | Extension | New parameter | What changes | Industry hook |
-| --- | --- | --- | --- | --- |
-| 1 | randomized algorithms | none | $\mathbb{E}[\mathrm{ALG}]$ instead of $\mathrm{ALG}$ | random tie-breaking is cheap |
-| 2 | **two related workers**, speeds $1$ and $H$ | $H \ge 1$ | runtime of $j$ is $p_j$ on the slow worker and $p_j/H$ on the fast one; new dilemma: use the idle slow worker or wait for the fast one | a partition mixing two node generations |
-| — | general related or unrelated speeds | many | out of scope; experiments only | — |
-
-If unrelated speeds $s_{ij}$ are ever used again, define speed heterogeneity per job,
-$H = \max_j \frac{\max_i s_{ij}}{\min_i s_{ij}}$, not globally over all $(i, j)$; the global
-definition also counts differences in job scale (see [notes/scoping_findings.md](notes/scoping_findings.md)).
+- **Synthetic:** draw $u_j$ from a coarse set of values (mimicking the modal requests in real traces),
+  then draw $p_j \in [u_j/\lambda, u_j]$, for example uniformly or with the mass near $u_j/\lambda$
+  (users overestimate).
+- **Traces:** take single-node jobs from a Parallel Workloads Archive trace. SWF gives the submit time
+  (field 2), the run time (field 4) and the requested time (field 9). Jobs with $p_j < u_j/\lambda$ break
+  the model's assumption. Either filter them out for a chosen $\lambda$, or report the ratio $u_j/p_j$
+  that is actually observed. Jobs killed at their limit fit the model exactly ($p_j = u_j$).
 
 ---
 
-## 7. Mapping to the code
+## 8. Optional extensions (later)
 
-| Object | Code |
+| Extension | New parameter | Question |
+| --- | --- | --- |
+| randomized algorithms | none | does randomizing order or delay beat every deterministic rule? |
+| two node generations, speeds $1$ and $H$ | $H$ | use an idle slow node or wait for a fast one? |
+| per-job accuracy | $\lambda_j$ | different users estimate with different accuracy |
+
+---
+
+## 9. Mapping to the code
+
+The current simulator implements v2: there is no declared limit. Changes needed for v3:
+
+| Needed | Where |
 | --- | --- |
-| instance with identical workers | `model.random_instance(n, m, speed_model="identical", p_min=..., p_max=..., size_model=...)` |
-| what the scheduler sees (no size) | `model.JobView` |
-| known parameters | `policies.Context` (`m`, `p_min`, `p_max`; `H = 1` on identical workers) |
-| online execution | `simulator.simulate(instance, policy)` |
-| $\mathrm{OPT}$ (exact, $n \lesssim 12$) / lower bound | `offline.offline_opt`, `offline.opt_lower_bound` |
-| long-job-then-short-jobs instance | `model.lower_bound_instance(n, L, delta_t, m, offset)` |
-| experiment sweep | `experiments.py`; for this scope, restrict the grid to `speed_model="identical"` |
-
-Known gaps in the current code relative to this definition:
-
-- `experiments.default_grid` still sweeps related and unrelated speeds.
-- Lower-bound scenarios are built with `offset=0`, so they do not adapt to a delayed rule's $\tau$.
-- Scenario labels print `H=4` for identical-speed scenarios even though they are built with $H = 1$.
-- There is no loader for Parallel Workloads Archive traces yet.
+| a declared limit per job, visible to policies | add `limit` to `model.Job` and `model.JobView` |
+| instance generator with $p_j \in [u_j/\lambda, u_j]$ | new generator in `model.py` |
+| policies SLF and Delayed-SLF | `policies.py` (register in `make_policy`) |
+| known parameter $\lambda$ | `policies.Context` |
+| Parallel Workloads Archive loader (SWF fields 2, 4, 9; single-node jobs) | new module |
+| exact OPT and lower bound | `offline.offline_opt` / `opt_lower_bound` work unchanged (they only use $r_j$ and $p_j$) |
+| experiment grid over $\lambda$ and $m$ | `experiments.py` (drop the speed models) |
