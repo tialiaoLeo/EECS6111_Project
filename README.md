@@ -14,10 +14,13 @@ The earlier heterogeneous-speed model (thread `i` runs job `j` at speed `s_ij`) 
 ## Setup
 
 ```bash
-python3 -m venv .venv            # on Ubuntu you may need: sudo apt install python3-venv
-.venv/bin/pip install -r requirements.txt
-.venv/bin/python -m pytest       # 144 tests, incl. OPT vs brute force
+conda env create -f environment.yml      # creates the "eecs6111" environment
+conda activate eecs6111
+python -m pytest                         # 144 tests, incl. OPT vs brute force
 ```
+
+After changing dependencies: `conda env update -f environment.yml --prune`.
+Without conda: `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`.
 
 ## Layout
 
@@ -39,24 +42,24 @@ All outputs go to `results/<timestamp>-<command>/` (change with `--out`).
 
 ```bash
 # 1. Exact simulation of one declared-limit instance: every baseline vs OPT, stacked Gantt charts
-.venv/bin/python -m sched_sim simulate -n 9 -m 2 --lam 8 --size-dist extremes --u-min 1 --u-max 32
+python -m sched_sim simulate -n 9 -m 2 --lam 8 --size-dist extremes --u-min 1 --u-max 32
 #    --size-dist: uniform | loguniform | low (p = u/lam) | high (p = u) | extremes
 
 # the proposal's lower-bound example with uninformative limits (all u_j = L, lam = L / delta)
-.venv/bin/python -m sched_sim simulate --lower-bound -n 7 -m 1 --p-min 1 --p-max 64
+python -m sched_sim simulate --lower-bound -n 7 -m 1 --p-min 1 --p-max 64
 
 # a real trace (Parallel Workloads Archive, SWF): first 200 single-node jobs, 4 workers, time in hours
-.venv/bin/python -m sched_sim simulate --trace path/to/log.swf -n 200 -m 4
+python -m sched_sim simulate --trace path/to/log.swf -n 200 -m 4
 #    --trace-min-runtime 60  : drop jobs shorter than 60 s (failed at start-up)
 #    --trace-lam-filter      : drop jobs with u/p > --lam (default: lam = largest u/p kept)
 
 # 2. Real multi-process execution with resource monitoring
-.venv/bin/python -m sched_sim execute -n 12 -m 3 --lam 4 --time-scale 0.05 --policies FCFS SLF DelayedSLF
+python -m sched_sim execute -n 12 -m 3 --lam 4 --time-scale 0.05 --policies FCFS SLF DelayedSLF
 
 # 3. Parallel experiment sweep over m x lam x size distribution (declared-limit model)
-.venv/bin/python -m sched_sim experiment -n 8 --trials 20 --workers 4
-.venv/bin/python -m sched_sim experiment --quick --trials 5
-.venv/bin/python -m sched_sim experiment --grid speeds --quick     # the earlier speed-model grid
+python -m sched_sim experiment -n 8 --trials 20 --workers 4
+python -m sched_sim experiment --quick --trials 5
+python -m sched_sim experiment --grid speeds --quick     # the earlier speed-model grid
 ```
 
 Policy strings: `FCFS`, `SLF`, `DelayedSLF` or `DelayedSLF:<alpha>` (eligible once `t >= alpha * u_j`),

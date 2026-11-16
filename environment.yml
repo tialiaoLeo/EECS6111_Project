@@ -1,0 +1,9 @@
+name: eecs6111
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - numpy>=1.26
+  - matplotlib>=3.8
+  - psutil>=5.9
+  - pytest>=8.0
