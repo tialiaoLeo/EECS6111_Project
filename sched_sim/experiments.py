@@ -38,6 +38,7 @@ class Scenario:
     H: float = 4.0
     lam: float = 1.0
     size_dist: str = "uniform"
+    load: float = 0.8  # limits only: arrival rate as a fraction of the workers' capacity
 
     @property
     def delta(self) -> float:
@@ -48,7 +49,7 @@ class Scenario:
         if self.kind == "lower_bound":
             return f"LB n={self.n} m={self.m} L={self.p_max:g}"
         if self.kind == "limits":
-            return f"limits/{self.size_dist} n={self.n} m={self.m} lam={self.lam:g} U={self.delta:g}"
+            return f"limits/{self.size_dist} n={self.n} m={self.m} lam={self.lam:g} U={self.delta:g} load={self.load:g}"
         h = "" if self.speed_model == "identical" else f" H={self.H:g}"
         return f"{self.speed_model}/{self.size_model} n={self.n} m={self.m} D={self.delta:g}{h}"
 
@@ -58,7 +59,7 @@ class Scenario:
         if self.kind == "limits":
             return limit_instance(
                 self.n, self.m, lam=self.lam, limits=limits_between(self.p_min, self.p_max),
-                size_dist=self.size_dist, seed=seed,
+                size_dist=self.size_dist, load=self.load, seed=seed,
             )
         return random_instance(
             self.n,
@@ -75,13 +76,27 @@ class Scenario:
 LIMIT_LAMS = (1.0, 2.0, 4.0, 16.0, 64.0)
 
 
-def limits_grid(n: int = 8, quick: bool = False) -> list[Scenario]:
-    """Declared-limit model: m x lam x size distribution, limits 1..32 (powers of two)."""
-    ms = (1, 2) if quick else (1, 2, 3)
-    lams = (1.0, 4.0, 64.0) if quick else LIMIT_LAMS
-    dists = ("uniform",) if quick else ("uniform", "low", "extremes")
+def limits_grid(
+    n: int = 8,
+    quick: bool = False,
+    ms: tuple[int, ...] | None = None,
+    lams: tuple[float, ...] | None = None,
+    dists: tuple[str, ...] | None = None,
+    load: float = 0.8,
+) -> list[Scenario]:
+    """Declared-limit model: m x lam x size distribution, limits 1..32 (powers of two).
+
+    `ms`, `lams` and `dists` override the default (or quick) values of each axis.
+    """
+    ms = ms or ((1, 2) if quick else (1, 2, 3))
+    lams = lams or ((1.0, 4.0, 64.0) if quick else LIMIT_LAMS)
+    dists = dists or (("uniform",) if quick else ("uniform", "low", "extremes"))
+    if any(m < 1 for m in ms):
+        raise ValueError("every m must be at least 1")
+    if any(lam < 1 for lam in lams):
+        raise ValueError("every lam must be at least 1")
     return [
-        Scenario("limits", n, m, "identical", "uniform", 1.0, 32.0, 1.0, lam, d)
+        Scenario("limits", n, m, "identical", "uniform", 1.0, 32.0, 1.0, float(lam), d, load)
         for m, lam, d in itertools.product(ms, lams, dists)
     ]
 
@@ -109,6 +124,7 @@ def run_trial(task_id: int, scenario: Scenario, seed: int, policies: list[str], 
         opt, opt_kind = opt_lower_bound(inst), "lower_bound"
     opt_seconds = time.perf_counter() - t
 
+    releases = sum(j.release for j in inst.jobs)
     rows = []
     for spec in policies:
         policy = make_policy(spec)
@@ -126,6 +142,8 @@ def run_trial(task_id: int, scenario: Scenario, seed: int, policies: list[str], 
                 "opt": opt,
                 "opt_kind": opt_kind,
                 "ratio": sched.total_completion / opt,
+                "total_flow": sched.total_completion - releases,
+                "flow_ratio": (sched.total_completion - releases) / (opt - releases),
                 "sim_seconds": time.perf_counter() - t,
             }
         )
@@ -193,11 +211,14 @@ def write_csv(rows: list[dict], path: str | Path) -> None:
 
 
 def summarize(rows: list[dict]) -> list[dict]:
-    """Mean / max ratio per (scenario, policy)."""
-    groups: dict[tuple[str, str], list[float]] = {}
+    """Mean / max ratio per (scenario, policy), for sum C_j and for total flow time."""
+    groups: dict[tuple[str, str], list[dict]] = {}
     for r in rows:
-        groups.setdefault((r["scenario"], r["policy"]), []).append(r["ratio"])
-    return [
-        {"scenario": s, "policy": p, "trials": len(v), "mean_ratio": sum(v) / len(v), "max_ratio": max(v)}
-        for (s, p), v in groups.items()
-    ]
+        groups.setdefault((r["scenario"], r["policy"]), []).append(r)
+    out = []
+    for (s, p), g in groups.items():
+        v, f = [r["ratio"] for r in g], [r["flow_ratio"] for r in g]
+        out.append({"scenario": s, "policy": p, "trials": len(g), "opt_kind": g[0]["opt_kind"],
+                    "mean_ratio": sum(v) / len(v), "max_ratio": max(v),
+                    "mean_flow_ratio": sum(f) / len(f), "max_flow_ratio": max(f)})
+    return out

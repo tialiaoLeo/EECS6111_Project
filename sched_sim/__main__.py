@@ -37,7 +37,7 @@ def _instance_from_args(a) -> Instance:
         return lower_bound_instance(a.n, L=a.p_max, delta_t=a.p_min, m=a.m, with_limits=a.model == "limits")
     if a.model == "limits":
         return limit_instance(
-            a.n, a.m, lam=a.lam, limits=limits_between(a.u_min, a.u_max), size_dist=a.size_dist, seed=a.seed,
+            a.n, a.m, lam=a.lam, limits=limits_between(a.u_min, a.u_max), size_dist=a.size_dist, load=a.load, seed=a.seed,
         )
     return random_instance(
         a.n, a.m, p_min=a.p_min, p_max=a.p_max, H=a.H,
@@ -59,11 +59,12 @@ def _add_instance_args(p: argparse.ArgumentParser, n: int, m: int) -> None:
     g.add_argument("--model", choices=("limits", "speeds"), default="limits",
                    help="limits: declared time limits on identical workers (v3); speeds: heterogeneous speeds")
     g.add_argument("-n", type=int, default=n, help="number of jobs")
-    g.add_argument("-m", type=int, default=m, help="number of worker threads")
+    g.add_argument("-m", type=int, default=m, help="number of machines (workers)")
     g.add_argument("--seed", type=int, default=0)
     lim = p.add_argument_group("declared-limit model (--model limits)")
     lim.add_argument("--lam", type=float, default=4.0, help="limits overestimate sizes by at most this factor")
     lim.add_argument("--size-dist", choices=SIZE_DISTS, default="uniform", help="sizes within [u/lam, u]")
+    lim.add_argument("--load", type=float, default=0.8, help="arrival rate / capacity of the m workers")
     lim.add_argument("--u-min", type=float, default=1.0, help="smallest declared limit (limits are powers of 2)")
     lim.add_argument("--u-max", type=float, default=32.0, help="largest declared limit")
     tr = p.add_argument_group("trace (--trace)")
@@ -123,9 +124,12 @@ def cmd_simulate(a) -> None:
         s.validate()
         schedules.append(s)
 
-    print(f"\n{'policy':28s} {'sum C_j':>10s} {'ratio vs ' + ref_kind:>22s}")
+    rel = sum(j.release for j in inst.jobs)
+    print(f"\nratios are against {ref_kind}")
+    print(f"{'policy':28s} {'sum C_j':>12s} {'ratio':>8s} {'flow time':>12s} {'ratio':>8s}")
     for s in schedules:
-        print(f"{s.policy:28s} {s.total_completion:10.3f} {s.total_completion / ref:22.3f}")
+        print(f"{s.policy:28s} {s.total_completion:12.3f} {s.total_completion / ref:8.3f} "
+              f"{s.total_completion - rel:12.3f} {(s.total_completion - rel) / (ref - rel):8.3f}")
     plot_schedules(schedules, out / "schedules.png")
     print(f"\nwrote {out}/schedules.png and instance.json")
 
@@ -166,7 +170,11 @@ def cmd_experiment(a) -> None:
     from .plots import plot_experiment_ratios, plot_experiment_tasks
 
     if a.grid == "limits":
-        scenarios = limits_grid(a.n, quick=a.quick)
+        scenarios = limits_grid(a.n, quick=a.quick, ms=tuple(a.ms) if a.ms else None,
+                                lams=tuple(a.lams) if a.lams else None,
+                                dists=tuple(a.size_dists) if a.size_dists else None, load=a.load)
+    elif a.ms or a.lams or a.size_dists:
+        raise SystemExit("--ms, --lams and --size-dists apply to --grid limits only")
     elif a.quick:
         scenarios = [Scenario("random", a.n, m, sm, "bimodal", 1.0, d, 4.0)
                      for m in (1, 2) for sm in ("identical", "unrelated") for d in (4.0, 32.0)]
@@ -184,15 +192,20 @@ def cmd_experiment(a) -> None:
     write_csv(summary, out / "summary.csv")
     res.monitor.to_csv(out / "resources.csv")
     plot_experiment_ratios(res.rows, out / "ratios.png")
+    plot_experiment_ratios(res.rows, out / "flow_ratios.png", key="flow_ratio")
     plot_experiment_tasks(res.tasks, res.monitor, out / "tasks_and_resources.png")
 
-    by_policy: dict[str, list[float]] = {}
+    kinds = sorted({r["opt_kind"] for r in res.rows})
+    ref = "exact OPT" if kinds == ["exact"] else "OPT lower bound" if kinds == ["lower_bound"] else "OPT (exact or lower bound)"
+    by_policy: dict[str, list[dict]] = {}
     for r in res.rows:
-        by_policy.setdefault(r["policy"], []).append(r["ratio"])
-    print(f"\nfinished in {res.wall_seconds:.1f}s. ALG/OPT over all trials:")
-    print(f"{'policy':28s} {'mean':>8s} {'max':>8s}")
-    for p, v in by_policy.items():
-        print(f"{p:28s} {sum(v) / len(v):8.3f} {max(v):8.3f}")
+        by_policy.setdefault(r["policy"], []).append(r)
+    print(f"\nfinished in {res.wall_seconds:.1f}s. Ratios against {ref} over all trials:")
+    print(f"{'':28s} {'sum C_j':>17s} {'flow time':>17s}")
+    print(f"{'policy':28s} {'mean':>8s} {'max':>8s} {'mean':>8s} {'max':>8s}")
+    for p, g in by_policy.items():
+        v, f = [r["ratio"] for r in g], [r["flow_ratio"] for r in g]
+        print(f"{p:28s} {sum(v) / len(v):8.3f} {max(v):8.3f} {sum(f) / len(f):8.3f} {max(f):8.3f}")
     walls = [t["wall_seconds"] for t in res.tasks]
     print(f"\nper-trial wall time: mean {sum(walls) / len(walls):.3f}s, max {max(walls):.3f}s")
     (out / "config.json").write_text(json.dumps(vars(a), indent=2, default=str))
@@ -227,6 +240,10 @@ def main(argv=None) -> None:
     x.add_argument("--workers", type=int, default=None, help="pool size (default: CPU count)")
     x.add_argument("--grid", choices=("limits", "speeds"), default="limits",
                    help="limits: declared-limit model (v3); speeds: heterogeneous-speed grid")
+    x.add_argument("--ms", type=int, nargs="+", default=None, help="worker counts to sweep (limits grid; default 1 2 3)")
+    x.add_argument("--lams", type=float, nargs="+", default=None, help="lam values to sweep (limits grid)")
+    x.add_argument("--size-dists", nargs="+", choices=SIZE_DISTS, default=None, help="size distributions to sweep")
+    x.add_argument("--load", type=float, default=0.8, help="arrival rate / capacity of the m workers (limits grid)")
     x.add_argument("--policies", nargs="+", default=None, help="default: the baselines of the grid's model")
     x.add_argument("--max-opt-n", type=int, default=10)
     x.add_argument("--interval", type=float, default=0.1)

@@ -13,6 +13,8 @@ Cost is O(m * 3^n + m * 2^n * n * front), which is fine up to n ~ 12.
 
 from __future__ import annotations
 
+import heapq
+
 from .model import Assignment, Instance, Schedule
 
 # Pareto entry: (finish, total, job, parent_entry)
@@ -86,6 +88,42 @@ def offline_opt(instance: Instance, max_n: int = 12) -> Schedule:
     return Schedule(instance, assignments, "OPT")
 
 
+def srpt_lower_bound(instance: Instance) -> float | None:
+    """Lower bound on Opt for identical workers: preemptive SRPT on one machine of speed m.
+
+    One machine that is m times faster can time-share any schedule of the m workers without
+    delaying a completion, and SRPT minimizes sum C_j on a single machine with preemption.
+    Returns None when the workers are not identical.
+    """
+    speeds = {s for j in instance.jobs for s in j.speeds}
+    if len(speeds) != 1:
+        return None
+    rate = instance.m * speeds.pop()
+    jobs = sorted(instance.jobs, key=lambda j: j.release)
+    heap: list[float] = []  # remaining work
+    now, total, k = 0.0, 0.0, 0
+    while k < len(jobs) or heap:
+        if not heap:
+            now = max(now, jobs[k].release)
+        while k < len(jobs) and jobs[k].release <= now:
+            heapq.heappush(heap, jobs[k].size)
+            k += 1
+        rem = heapq.heappop(heap)
+        finish = now + rem / rate
+        if k < len(jobs) and jobs[k].release < finish:
+            heapq.heappush(heap, rem - (jobs[k].release - now) * rate)
+            now = jobs[k].release
+        else:
+            now = finish
+            total += now
+    return total
+
+
 def opt_lower_bound(instance: Instance) -> float:
-    """Cheap lower bound on Opt for large instances: every job finishes after r_j + p_j / max_i s_ij."""
-    return sum(j.release + j.size / max(j.speeds) for j in instance.jobs)
+    """Lower bound on Opt for large instances: the larger of
+    (a) sum of r_j + p_j / max_i s_ij (no job finishes earlier), and
+    (b) `srpt_lower_bound` when the workers are identical.
+    """
+    trivial = sum(j.release + j.size / max(j.speeds) for j in instance.jobs)
+    srpt = srpt_lower_bound(instance)
+    return trivial if srpt is None else max(trivial, srpt)

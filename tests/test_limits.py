@@ -17,6 +17,7 @@ from sched_sim import (
 )
 from sched_sim.experiments import Scenario, limits_grid, run_trial
 from sched_sim.model import SIZE_DISTS, limits_between
+from sched_sim.offline import opt_lower_bound, srpt_lower_bound
 from sched_sim.policies import LIMIT_POLICIES, make_policy
 
 
@@ -180,3 +181,36 @@ def test_limits_grid_and_trial():
     assert len(out["rows"]) == len(LIMIT_POLICIES)
     assert all(r["ratio"] >= 1 - 1e-9 and r["opt_kind"] == "exact" for r in out["rows"])
     assert all(r["lam"] == 4.0 for r in out["rows"])
+
+
+def test_limits_grid_axes_are_configurable():
+    grid = limits_grid(6, ms=(1, 8), lams=(24.0,), dists=("low",))
+    assert [(s.m, s.lam, s.size_dist) for s in grid] == [(1, 24.0, "low"), (8, 24.0, "low")]
+    with pytest.raises(ValueError):
+        limits_grid(6, ms=(0,))
+    with pytest.raises(ValueError):
+        limits_grid(6, lams=(0.5,))
+
+
+@pytest.mark.parametrize("m", [1, 2, 3])
+@pytest.mark.parametrize("seed", range(10))
+def test_lower_bound_never_exceeds_opt(m, seed):
+    inst = limit_instance(8, m, lam=4.0, size_dist="extremes", load=1.1, seed=seed)
+    opt = offline_opt(inst).total_completion
+    assert srpt_lower_bound(inst) <= opt + 1e-6
+    assert opt_lower_bound(inst) <= opt + 1e-6
+    assert opt_lower_bound(inst) >= sum(j.release + j.size for j in inst.jobs) - 1e-9
+
+
+def test_srpt_lower_bound_is_exact_for_one_batch_on_one_machine():
+    # all released at 0: SRPT = SPT = OPT
+    inst = _inst([(0.0, 3.0, 3.0), (0.0, 1.0, 1.0), (0.0, 2.0, 2.0)])
+    assert srpt_lower_bound(inst) == pytest.approx(1 + 3 + 6)
+    assert srpt_lower_bound(Instance([Job(0, 0.0, 1.0, (1.0, 2.0))], 2, 1.0, 1.0)) is None
+
+
+def test_large_instances_use_the_lower_bound_and_report_flow_ratios():
+    sc = Scenario("limits", 300, 4, "identical", "uniform", 1.0, 32.0, 1.0, 8.0, "uniform", 0.95)
+    out = run_trial(0, sc, seed=0, policies=["FCFS", "SLF"], max_opt_n=10)
+    assert all(r["opt_kind"] == "lower_bound" for r in out["rows"])
+    assert all(r["flow_ratio"] >= r["ratio"] >= 1 - 1e-9 for r in out["rows"])

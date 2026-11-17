@@ -136,7 +136,7 @@ def plot_policy_comparison(results: list[ExecutionResult], path: str | Path) -> 
     plt.close(fig)
 
 
-def plot_experiment_ratios(rows: list[dict], path: str | Path) -> None:
+def plot_experiment_ratios(rows: list[dict], path: str | Path, key: str = "ratio") -> None:
     """Competitive ratio distributions per panel, and mean/worst ratio against the panel's parameter.
 
     Panels: one per speed model for kind="random" (x = Delta), one per m for kind="limits"
@@ -157,14 +157,14 @@ def plot_experiment_ratios(rows: list[dict], path: str | Path) -> None:
     ncols = max(len(panels) + (1 if lb_rows else 0), 1)
     fig, axes = plt.subplots(2, ncols, figsize=(5 * ncols, 8), squeeze=False)
     for c, (title, sub, xkey, xlabel) in enumerate(panels):
-        data = [[r["ratio"] for r in sub if r["policy"] == p] for p in policies]
+        data = [[r[key] for r in sub if r["policy"] == p] for p in policies]
         axes[0, c].boxplot(data, tick_labels=policies, showfliers=True)
         axes[0, c].set_title(f"{title}: ALG / OPT", fontsize=10)
         axes[0, c].tick_params(axis="x", rotation=40, labelsize=7)
 
         xs = sorted({r[xkey] for r in sub})
         for k, p in enumerate(policies):
-            vals = [[r["ratio"] for r in sub if r["policy"] == p and r[xkey] == x] for x in xs]
+            vals = [[r[key] for r in sub if r["policy"] == p and r[xkey] == x] for x in xs]
             axes[1, c].plot(xs, [np.mean(v) for v in vals], "o-", color=CMAP(k * 2 % 20), label=p)
             axes[1, c].plot(xs, [np.max(v) for v in vals], "x:", color=CMAP(k * 2 % 20))
         if len(xs) > 1 and min(xs) > 0:
@@ -175,7 +175,7 @@ def plot_experiment_ratios(rows: list[dict], path: str | Path) -> None:
         c = ncols - 1
         Ls = sorted({r["p_max"] for r in lb_rows})
         for k, p in enumerate(policies):
-            vals = [np.mean([r["ratio"] for r in lb_rows if r["policy"] == p and r["p_max"] == L]) for L in Ls]
+            vals = [np.mean([r[key] for r in lb_rows if r["policy"] == p and r["p_max"] == L]) for L in Ls]
             axes[0, c].plot(Ls, vals, "o-", color=CMAP(k * 2 % 20), label=p)
         axes[0, c].set_xscale("log", base=2)
         axes[0, c].set_xlabel("L (long job size)")
