@@ -1,0 +1,171 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1in]{geometry}
+\usepackage{amsmath,amssymb,booktabs,tabularx,enumitem}
+\usepackage[hidelinks]{hyperref}
+\setlist{itemsep=2pt,topsep=4pt}
+\newcommand{\OPT}{\mathrm{OPT}}
+\newcommand{\ALG}{\mathrm{ALG}}
+
+\title{Online Non-Preemptive Scheduling of Batch Jobs\\with Declared Time Limits\\[4pt]
+\large Problem Definition}
+\author{Tianpei Liao and Yiming Shao\\[2pt]EECS 6111 (Online Algorithms) course project}
+\date{}
+
+\begin{document}
+\maketitle
+
+\section{Summary}
+
+A cluster partition has $m$ identical machines. Jobs arrive over time. When a job arrives, the
+scheduler sees its \emph{declared time limit}, but not its true running time. It only knows that the
+limit overestimates the running time by at most a known factor $\lambda$. Jobs cannot be interrupted
+once started. The goal is to minimize the total completion time. We ask how the best possible
+competitive ratio depends on $\lambda$ and $m$.
+
+\section{Problem definition}
+
+\subsection{Input}
+
+\begin{itemize}
+  \item \textbf{Machines.} A fixed set $\mathcal{M}=\{1,\dots,m\}$ of identical unit-speed machines,
+        all available from time $0$. Each machine runs at most one job at a time.
+  \item \textbf{Jobs.} A set $\mathcal{J}=\{1,\dots,n\}$ revealed online. Job $j$ has
+        \begin{itemize}
+          \item a release time $r_j\ge 0$,
+          \item a declared limit $u_j>0$ (a duration),
+          \item a true running time $p_j>0$ (a duration).
+        \end{itemize}
+        Each job needs exactly one machine.
+  \item \textbf{Accuracy parameter.} A dimensionless number $\lambda\ge 1$, the same for all jobs,
+        such that
+        \begin{equation}\label{eq:lambda}
+          \frac{u_j}{\lambda}\;\le\;p_j\;\le\;u_j
+          \qquad\text{equivalently}\qquad
+          1\;\le\;\frac{u_j}{p_j}\;\le\;\lambda .
+        \end{equation}
+        A limit never underestimates the running time and overestimates it by a factor of at most
+        $\lambda$. For example, with $\lambda=4$ a job that declares $8$ hours runs for between $2$
+        and $8$ hours. The limits $u_j$ themselves may differ arbitrarily between jobs.
+\end{itemize}
+
+\subsection{Schedule and feasibility}
+
+A schedule assigns each job $j$ a machine $a_j\in\mathcal{M}$ and a start time $S_j$. Its
+completion time is
+\[
+  C_j = S_j + p_j .
+\]
+A schedule is feasible if:
+\begin{enumerate}
+  \item \textbf{Release:} $S_j\ge r_j$ for every job $j$.
+  \item \textbf{Capacity:} if $j\ne k$ and $a_j=a_k$, then $[S_j,C_j)\cap[S_k,C_k)=\varnothing$.
+  \item \textbf{Non-preemption:} job $j$ runs without interruption on machine $a_j$ during
+        $[S_j,C_j)$. It cannot be paused, migrated, or killed and restarted.
+\end{enumerate}
+A machine may be left idle while jobs are waiting.
+
+\subsection{Online information}
+
+The scheduler knows $m$ and $\lambda$ in advance. It does not know $n$. At time $t$ it knows
+\[
+  \mathcal{I}(t)=\{m,\lambda\}
+  \;\cup\;\{(r_j,u_j): r_j\le t\}
+  \;\cup\;\{(a_j,S_j): S_j\le t\}
+  \;\cup\;\{C_j: C_j\le t\},
+\]
+and every decision at time $t$ must be a function of $\mathcal{I}(t)$. So the scheduler learns that
+job $j$ exists only at $r_j$, and from then on knows $p_j\in[u_j/\lambda,\,u_j]$ but learns $p_j$
+itself only when the job completes.
+
+\subsection{Objective}
+
+\[
+  \text{minimize}\quad \sum_{j\in\mathcal{J}} C_j .
+\]
+\emph{Remark.} Clusters usually report the flow time $F_j=C_j-r_j$. Since
+$\sum_j F_j=\sum_j C_j-\sum_j r_j$, both objectives have the same optimal schedules, but the
+competitive ratios differ (the ratio for $\sum_j C_j$ is never larger).
+
+\subsection{Competitive ratio}
+
+For an instance $I$, let $\OPT(I)$ be the minimum of $\sum_j C_j$ over all feasible schedules. The
+optimum knows every $r_j$ and $p_j$ in advance, uses the same $m$ machines, is non-preemptive, and
+may idle. Let $\mathcal{I}(\lambda,m)$ be the set of all instances with $m$ machines that satisfy
+\eqref{eq:lambda}, with any number of jobs, release times and limits. The competitive ratio of a
+deterministic online algorithm $\ALG$ and the best achievable ratio are
+\[
+  \rho_{\ALG}(\lambda,m)=\sup_{I\in\mathcal{I}(\lambda,m)}\frac{\ALG(I)}{\OPT(I)},
+  \qquad
+  \rho^{*}(\lambda,m)=\inf_{\ALG}\rho_{\ALG}(\lambda,m).
+\]
+
+\noindent\textbf{Goal.} Determine how $\rho^{*}(\lambda,m)$ grows with $\lambda$ and whether it
+depends on $m$. Two special cases anchor the problem:
+\begin{itemize}
+  \item $\lambda=1$: then $p_j=u_j$, which is the clairvoyant online problem
+        $P\mid r_j\mid\sum C_j$. On one machine the best deterministic ratio is $2$
+        (Hoogeveen and Vestjens, 1996).
+  \item All $u_j$ equal: the limits carry no information that separates jobs. The scheduler only
+        knows that all running times lie within a factor $\lambda$ of each other.
+\end{itemize}
+A rule that ignores the limits, such as first-come-first-served, has a ratio that grows without
+bound as the spread of the limits grows, even for $\lambda=1$. A ratio that depends on $\lambda$
+alone therefore requires using $u_j$.
+
+\section{Mapping to industry}
+
+The model describes single-node batch jobs on one homogeneous partition of an HPC cluster, as
+managed by a workload manager such as Slurm.
+
+\begin{center}
+\small
+\begin{tabularx}{\textwidth}{@{}l X l@{}}
+\toprule
+\textbf{Model} & \textbf{Real system} & \textbf{Fit}\\
+\midrule
+$m$ identical machines, fixed & the nodes (or cores) of one homogeneous partition & holds\\
+jobs arrive online & users submit jobs over time & holds\\
+$u_j$ known at $r_j$ & the requested wall time (\texttt{sbatch --time}), capped by the partition's \texttt{MaxTime} & holds\\
+$p_j\le u_j$ & the limit is enforced: a job that reaches it is killed and frees its node, so for the schedule it is a job with $p_j=u_j$ & holds\\
+$p_j\ge u_j/\lambda$ & no such floor exists; many jobs end far below their limit & stylized\\
+non-preemptive & Slurm's default configuration does not preempt & holds\\
+one machine per job & only single-node jobs are modeled & restriction\\
+objective $\sum_j C_j$ & sites track average wait and turnaround time & close\\
+\bottomrule
+\end{tabularx}
+\end{center}
+
+\noindent\textbf{Why declared limits are the right information model.}
+Users must request a time limit, and schedulers already rely on it (backfilling). Workload studies
+show that these requests are poor predictions: actual running times are spread widely below the
+request (Mu'alem and Feitelson, 2001), and about $90\%$ of jobs use the same $20$ request values
+(Tsafrir, Etsion and Feitelson, 2007). A limit is an upper bound, not an estimate, which is exactly
+what \eqref{eq:lambda} states.
+
+\medskip
+\noindent\textbf{Real data.}
+The Parallel Workloads Archive records, for each job of many production clusters, the submit time
+($r_j$), the requested time ($u_j$) and the actual running time ($p_j$). The ratio $u_j/p_j$, and
+hence $\lambda$, can be measured directly, and scheduling rules can be compared on real job streams.
+
+\medskip
+\noindent\textbf{What the model leaves out.}
+Multi-node jobs and backfill reservations; priorities, fair-share and per-user limits; heterogeneous
+node types; and jobs that fail right after starting ($p_j\approx 0$), which violate the lower bound
+in \eqref{eq:lambda}. Since real traces have no hard floor on $p_j$, experiments either remove jobs
+with $u_j/p_j>\lambda$ for a chosen $\lambda$, or report the largest ratio observed.
+
+\section*{References}
+\begin{itemize}[leftmargin=*]
+  \item J.~A.~Hoogeveen and A.~P.~A.~Vestjens. Optimal on-line algorithms for single-machine
+        scheduling. \emph{IPCO}, 1996.
+  \item A.~W.~Mu'alem and D.~G.~Feitelson. Utilization, predictability, workloads, and user runtime
+        estimates in scheduling the IBM SP2 with backfilling. \emph{IEEE TPDS} 12(6), 2001.
+  \item D.~Tsafrir, Y.~Etsion and D.~G.~Feitelson. Backfilling using system-generated predictions
+        rather than user runtime estimates. \emph{IEEE TPDS} 18(6), 2007.
+  \item Slurm documentation: \url{https://slurm.schedmd.com/sbatch.html},
+        \url{https://slurm.schedmd.com/preempt.html}.
+  \item Parallel Workloads Archive: \url{https://www.cs.huji.ac.il/labs/parallel/workload/}.
+\end{itemize}
+
+\end{document}
