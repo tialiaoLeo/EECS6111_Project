@@ -16,7 +16,7 @@ The earlier heterogeneous-speed model (thread `i` runs job `j` at speed `s_ij`) 
 ```bash
 conda env create -f environment.yml      # creates the "eecs6111" environment
 conda activate eecs6111
-python -m pytest                         # 177 tests, incl. OPT vs brute force
+python -m pytest                         # 188 tests, incl. OPT vs brute force
 ```
 
 After changing dependencies: `conda env update -f environment.yml --prune`.
@@ -67,6 +67,10 @@ python -m sched_sim experiment --ms 1 4 8 --lams 4 24 --size-dists uniform   # c
 # streams sum C_j is dominated by the release times and its ratio is close to 1 for every rule.
 python -m sched_sim experiment -n 2000 --trials 5 --ms 1 4 16 --lams 4 24 --load 0.95
 python -m sched_sim simulate -n 500 -m 4 --lam 24 --load 0.95
+
+# Worst-case test of the waiting threshold alpha of DelayedSLF (one machine): every policy is run
+# against adversarial instances built against it, and compared with the exact optimum.
+python -m sched_sim.alpha_sweep --lams 1 4 16 64 256
 python -m sched_sim experiment --grid speeds --quick     # the earlier speed-model grid
 ```
 
